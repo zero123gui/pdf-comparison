@@ -22,7 +22,7 @@ REPETICAO_MIN = 0.30   # linha de margem que aparece em >= 30% das páginas é d
 LIMIAR_PAREAMENTO = 0.5
 MARCADO = 0.5          # fração de palavras alteradas coloridas para contar como "marcado"
 SO_NUMERACAO = re.compile(r"^\d+(\.\d+)+\.?$")
-LIDER_SUMARIO = re.compile(r"\s*\.{4,}\s*\d*\s*$")
+LIDER_SUMARIO = re.compile(r"\.{4,}.*$")
 INICIO_ITEM = re.compile(r"^(\s*[•\-–▪●○◦]\s|\d+(\.\d+)*[.)]?\s)")
 
 
@@ -149,12 +149,29 @@ def _norm_token(t):
 
 
 def prepara(paragrafos):
+    # páginas de sumário: a maioria dos parágrafos tem líder pontilhado
+    com_lider, total = Counter(), Counter()
     for p in paragrafos:
-        pal = [(w, c) for w, c in p["palavras"]]
-        txt = LIDER_SUMARIO.sub("", " ".join(w for w, _ in pal))
-        if len(txt) < len(" ".join(w for w, _ in pal)):
-            pal = [(w, c) for w, c in pal if not re.fullmatch(r"\.{2,}\d*|\d+", w)] if len(pal) > 1 else pal
-            pal = [(w, c) for w, c in pal if "...." not in w]
+        total[p["pagina"]] += 1
+        com_lider[p["pagina"]] += any(LIDER_SUMARIO.search(w) for w, _ in p["palavras"])
+    pag_sumario = {pg for pg in total if com_lider[pg] >= 0.3 * total[pg]}
+    for p in paragrafos:
+        pal = []
+        for w, c in p["palavras"]:
+            # sumário: corta no líder pontilhado (a palavra pode vir colada: "DISTINTOS.....")
+            # e descarta o que vem depois (nº de página, que muda de uma versão para outra)
+            antes = LIDER_SUMARIO.sub("", w)
+            if p["pagina"] in pag_sumario and re.fullmatch(r"\.{2,}", w):
+                antes = ""
+            if antes != w:
+                if antes:
+                    pal.append((antes, c))
+                break
+            pal.append((w, c))
+        else:
+            # entrada de sumário sem líder extraído: descarta o nº de página no fim
+            if p["pagina"] in pag_sumario and len(pal) > 2 and pal[-1][0].isdigit():
+                pal.pop()
         p["tokens"] = [_norm_token(w) for w, _ in pal]
         p["cores"] = [c for _, c in pal]
         p["chave"] = " ".join(p["tokens"])
