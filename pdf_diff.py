@@ -186,6 +186,25 @@ def _ordem_leitura(blocos, regras):
 
 
 def _ordena_faixa(faixa):
+    colunas = _colunas(faixa)
+    segs = [(s, k) for k, c in enumerate(colunas) for b in c["blocos"] for s in b["segs"]]
+    if len(colunas) >= 2:
+        # tabela sem borda entre as linhas: células de colunas diferentes na mesma altura
+        # (cada linha lida da esquerda para a direita; a linha 5 entra depois da 4 em qualquer página)
+        linhas = []
+        for s, k in sorted(segs, key=lambda t: t[0]["top"]):
+            if linhas and abs(s["top"] - linhas[-1]["top"]) <= 2.5:
+                linhas[-1]["itens"].append((s, k))
+            else:
+                linhas.append({"top": s["top"], "itens": [(s, k)]})
+        alinhadas = [l for l in linhas if len({k for _, k in l["itens"]}) >= 2]
+        if len(alinhadas) >= 2 and sum(len(l["itens"]) for l in alinhadas) >= 0.7 * len(segs):
+            return [{"segs": [s], "top": l["top"], "bottom": s["bottom"], "x0": s["x0"], "x1": s["x1"]}
+                    for l in linhas for s, _ in sorted(l["itens"], key=lambda t: t[0]["x0"])]
+    return [b for c in colunas for b in sorted(c["blocos"], key=lambda b: b["top"])]
+
+
+def _colunas(faixa):
     colunas = []
     for b in sorted(faixa, key=lambda b: b["x0"]):
         if colunas and b["x0"] < colunas[-1]["x1"]:
@@ -193,7 +212,7 @@ def _ordena_faixa(faixa):
             colunas[-1]["x1"] = max(colunas[-1]["x1"], b["x1"])
         else:
             colunas.append({"blocos": [b], "x1": b["x1"]})
-    return [b for c in colunas for b in sorted(c["blocos"], key=lambda b: b["top"])]
+    return colunas
 
 
 def _junta(atual, palavras):
@@ -372,7 +391,7 @@ def _itens_do_bloco(base, rev):
             g.pop()
         partes, ins_cor, ins_tot = [], 0, 0
         tem_ins = tem_del = False
-        pag_b = pag_r = None
+        pags_b, pags_r = [], []
         k0 = g[0]
         if k0 > 0 and ops[k0 - 1][0] == "equal":
             _, a, b, c, d = ops[k0 - 1]
@@ -385,11 +404,11 @@ def _itens_do_bloco(base, rev):
                 continue
             if i2 > i1:
                 tem_del = True
-                pag_b = pag_b or bp[i1]
+                pags_b += bp[i1:i2]
                 partes.append("<del>%s</del>" % _texto(bt, bi, i1, i2))
             if j2 > j1:
                 tem_ins = True
-                pag_r = pag_r or rp[j1]
+                pags_r += rp[j1:j2]
                 partes.append("<ins>%s</ins>" % _texto(rt, ri, j1, j2))
                 ins_tot += j2 - j1
                 ins_cor += sum(rc[j1:j2])
@@ -400,14 +419,18 @@ def _itens_do_bloco(base, rev):
             partes.append(_texto(rt, ri, c, fim) + (" …" if fim < d or kf < len(ops) - 1 else ""))
         # página de referência da outra versão (para itens de um lado só)
         ref = ops[g[0]]
-        if pag_b is None and bp:
-            pag_b = bp[min(ref[1], len(bp) - 1)]
-        if pag_r is None and rp:
-            pag_r = rp[min(ref[3], len(rp) - 1)]
+        if not pags_b and bp:
+            pags_b = [bp[min(ref[1], len(bp) - 1)]]
+        if not pags_r and rp:
+            pags_r = [rp[min(ref[3], len(rp) - 1)]]
+        pag_b, pag_b_fim = (min(pags_b), max(pags_b)) if pags_b else (None, None)
+        pag_r, pag_r_fim = (min(pags_r), max(pags_r)) if pags_r else (None, None)
         tipo = "modificado" if tem_ins and tem_del else ("adicionado" if tem_ins else "removido")
         itens.append({"tipo": tipo,
                       "pag_b": None if tipo == "adicionado" else pag_b,
+                      "pag_b_fim": pag_b_fim,
                       "pag_r": None if tipo == "removido" else pag_r,
+                      "pag_r_fim": pag_r_fim,
                       "html": " ".join(partes),
                       "frac": (ins_cor / ins_tot) if ins_tot else None})
     return itens
@@ -494,11 +517,13 @@ def gera_html(args, itens, colorido_igual, info):
              "<span style='margin-left:auto;color:var(--mut);font-size:13px;align-self:center'><span id='n'></span> itens</span></div>")
     for k, it in enumerate(itens, 1):
         m = marcacao(it)
+        def faixa(ini, fim):
+            return "%d" % ini if not fim or fim == ini else "%d–%d" % (ini, fim)
         pags = []
         if it["pag_b"]:
-            pags.append("base p. %d" % it["pag_b"])
+            pags.append("base p. " + faixa(it["pag_b"], it.get("pag_b_fim")))
         if it["pag_r"]:
-            pags.append("revisada p. %d" % it["pag_r"])
+            pags.append("revisada p. " + faixa(it["pag_r"], it.get("pag_r_fim")))
         rot = {"sem": "<span class='m-sem'>sem cor</span>", "parcial": "cor parcial",
                "marcado": "<span class='m-marcado'>marcado em cor</span>", "n/a": ""}[m]
         h.append("<section class='item' data-tipo='%s' data-marc='%s'><header><b>#%d</b>"
