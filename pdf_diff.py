@@ -19,11 +19,12 @@ import pdfplumber
 
 MARGEM = 0.15          # fração da página considerada área de cabeçalho/rodapé
 REPETICAO_MIN = 0.30   # linha de margem que aparece em >= 30% das páginas é descartada
-LIMIAR_PAREAMENTO = 0.5
 MARCADO = 0.5          # fração de palavras alteradas coloridas para contar como "marcado"
 SO_NUMERACAO = re.compile(r"^\d+(\.\d+)+\.?$")
 LIDER_SUMARIO = re.compile(r"\.{4,}.*$")
-INICIO_ITEM = re.compile(r"^(\s*[•\-–▪●○◦]\s|\d+(\.\d+)*[.)]?\s)")
+# início de item: marcador, numeração de seção (8.4.1) ou "1." / "1)"; um número solto ("412 MW") não conta
+NUMERACAO_PASSO = re.compile(r"\d+(\.\d+){2,}")
+INICIO_ITEM = re.compile(r"^(\s*[•\-–▪●○◦]\s|\d+(\.\d+)+[.)]?\s|\d+[.)]\s)")
 
 
 # --------------------------------------------------------------------- extração
@@ -47,6 +48,13 @@ def _linhas_pagina(args):
             palavras = pag.extract_words(
                 extra_attrs=["non_stroking_color"], keep_blank_chars=False, use_text_flow=False
             )
+            regras = {"h": [], "v": []}
+            for r in pag.rects:
+                w, h = r["x1"] - r["x0"], r["bottom"] - r["top"]
+                if h <= 2.5 and w >= 15:
+                    regras["h"].append((r["x0"], r["x1"], (r["top"] + r["bottom"]) / 2))
+                elif w <= 2.5 and h >= 8:
+                    regras["v"].append(((r["x0"] + r["x1"]) / 2, r["top"], r["bottom"]))
             linhas = []
             for grupo in pdfplumber.utils.cluster_objects(palavras, "top", 3):
                 grupo = sorted(grupo, key=lambda w: w["x0"])
@@ -59,6 +67,8 @@ def _linhas_pagina(args):
                     "altura_pag": pag.height,
                     "largura_pag": pag.width,
                     "palavras": [(w["text"], _colorido(w.get("non_stroking_color"))) for w in grupo],
+                    "xs": [(w["x0"], w["x1"]) for w in grupo],
+                    "regras": regras,
                 })
             saida.append((i + 1, sorted(linhas, key=lambda l: l["top"])))
     return saida
@@ -88,57 +98,155 @@ def remove_repetidas(linhas, n_paginas):
         cont.update(vistas)
     repetidas = {k for k, v in cont.items() if v >= REPETICAO_MIN * n_paginas}
     mantidas = [l for l in linhas
-                if not (len(l["palavras"]) == 1 and SO_NUMERACAO.match(l["palavras"][0][0]))
-                and not (na_margem(l) and _normaliza_linha(" ".join(w for w, _ in l["palavras"])) in repetidas)]
+                if not (na_margem(l) and _normaliza_linha(" ".join(w for w, _ in l["palavras"])) in repetidas)]
     return mantidas, repetidas
 
 
 # ------------------------------------------------------------------- parágrafos
-def monta_paragrafos(linhas):
-    """Agrupa linhas em parágrafos: [{'palavras': [(txt, colorido)], 'pagina': n}]."""
+# vão horizontal (pt) que separa colunas sem borda desenhada; as células de tabela são separadas
+# pelas bordas verticais, e texto justificado em célula estreita pode ter vãos grandes entre palavras
+VAO_COLUNA = 60
+
+
+def _borda_vertical(l, xa, xb):
+    meio = (l["top"] + l["bottom"]) / 2
+    return any(xa - 1 <= x <= xb + 1 and y0 <= meio <= y1 for x, y0, y1 in l["regras"]["v"])
+
+
+def _borda_horizontal(regras, y0, y1, x0, x1):
+    """Há uma borda horizontal de tabela entre y0 e y1 sobre o intervalo x0..x1?"""
+    return any(y0 - 1 <= y <= y1 + 1 and rx0 <= x1 and rx1 >= x0 for rx0, rx1, y in regras["h"])
+
+
+def _segmentos(linhas_pag):
+    """Divide cada linha em segmentos separados por vãos largos (células de tabela, colunas)."""
+    segs = []
+    for l in linhas_pag:
+        ini = 0
+        for k in range(1, len(l["palavras"]) + 1):
+            if k == len(l["palavras"]) or l["xs"][k][0] - l["xs"][k - 1][1] > VAO_COLUNA or \
+                    _borda_vertical(l, l["xs"][k - 1][1], l["xs"][k][0]):
+                segs.append({"top": l["top"], "bottom": l["bottom"],
+                             "x0": l["xs"][ini][0], "x1": l["xs"][k - 1][1],
+                             "palavras": l["palavras"][ini:k]})
+                ini = k
+    return segs
+
+
+def _blocos(segs, regras):
+    """Liga segmentos empilhados na mesma coluna em blocos (uma célula / um trecho de texto)."""
+    blocos = []
+    for s in sorted(segs, key=lambda s: (s["top"], s["x0"])):
+        h = max(s["bottom"] - s["top"], 1)
+        melhor, ov_melhor = None, 0
+        for b in blocos:
+            u = b["segs"][-1]
+            dv = s["top"] - u["bottom"]
+            # empilhado de verdade: começa abaixo da linha anterior (senão é coluna vizinha)
+            if s["top"] - u["top"] <= 0.5 * h or dv > 1.5 * h or dv < -1:
+                continue
+            if _borda_horizontal(regras, u["bottom"], s["top"], s["x0"], s["x1"]):
+                continue
+            ov = min(s["x1"], u["x1"]) - max(s["x0"], u["x0"])
+            # recuo deslocado: a continuação volta à margem, à esquerda da linha anterior
+            if ov > 0 or abs(s["x0"] - u["x0"]) < 15 or (dv <= 0.6 * h and s["x0"] <= u["x0"]):
+                if melhor is None or ov > ov_melhor:
+                    melhor, ov_melhor = b, ov
+        if melhor is None:
+            blocos.append({"segs": [s]})
+        else:
+            melhor["segs"].append(s)
+    for b in blocos:
+        b["top"] = b["segs"][0]["top"]
+        b["bottom"] = max(s["bottom"] for s in b["segs"])
+        b["x0"] = min(s["x0"] for s in b["segs"])
+        b["x1"] = max(s["x1"] for s in b["segs"])
+    return blocos
+
+
+def _linha_tabela(b, regras):
+    """Posição (y) da borda horizontal logo acima do bloco: igual para todas as células da mesma linha."""
+    ys = [y for rx0, rx1, y in regras["h"] if y < b["top"] + 1 and rx0 <= b["x1"] and rx1 >= b["x0"]]
+    return round(max(ys)) if ys else -1
+
+
+def _ordem_leitura(blocos, regras):
+    """Faixas horizontais de cima para baixo; dentro da faixa, coluna da esquerda para a direita."""
+    for b in blocos:
+        b["linha"] = _linha_tabela(b, regras)
+    ordenados, faixa, base = [], [], None
+    for b in sorted(blocos, key=lambda b: (b["top"], b["x0"])):
+        if faixa and b["top"] < base - 1 and b["linha"] == faixa[0]["linha"]:
+            faixa.append(b)
+            base = max(base, b["bottom"])
+        else:
+            ordenados += _ordena_faixa(faixa)
+            faixa, base = [b], b["bottom"]
+    return ordenados + _ordena_faixa(faixa)
+
+
+def _ordena_faixa(faixa):
+    colunas = []
+    for b in sorted(faixa, key=lambda b: b["x0"]):
+        if colunas and b["x0"] < colunas[-1]["x1"]:
+            colunas[-1]["blocos"].append(b)
+            colunas[-1]["x1"] = max(colunas[-1]["x1"], b["x1"])
+        else:
+            colunas.append({"blocos": [b], "x1": b["x1"]})
+    return [b for c in colunas for b in sorted(c["blocos"], key=lambda b: b["top"])]
+
+
+def _junta(atual, palavras):
+    """Acrescenta palavras ao parágrafo, unindo palavra quebrada com hífen no fim da linha."""
+    pal = list(palavras)
+    if atual["palavras"]:
+        ant, cor_ant = atual["palavras"][-1]
+        if len(ant) > 1 and ant.endswith("-") and ant[-2].isalnum():
+            atual["palavras"].pop()
+            # o hífen é mantido: no Word ele é do próprio vocábulo ("pré-requisitos"), não de hifenização
+            pal[0] = (ant + pal[0][0], cor_ant or pal[0][1])
+    atual["palavras"].extend(pal)
+
+
+def monta_paragrafos(linhas, numeros=None):
+    """Agrupa linhas em parágrafos: [{'palavras': [(txt, colorido)], 'pagina': n}].
+
+    O texto é lido por blocos (colunas/células), então uma quebra de linha causada por
+    mudança de fonte não altera a ordem nem o conteúdo do parágrafo.
+    """
     por_pag = {}
     for l in linhas:
         por_pag.setdefault(l["pagina"], []).append(l)
 
-    paragrafos, atual = [], None
-
-    def fecha():
-        nonlocal atual
-        if atual and atual["palavras"]:
-            paragrafos.append(atual)
-        atual = None
-
+    paragrafos = []
     for pag in sorted(por_pag):
-        ls = por_pag[pag]
-        alturas = sorted(l["bottom"] - l["top"] for l in ls)
-        altura = alturas[len(alturas) // 2] if alturas else 10
-        for k, l in enumerate(ls):
-            texto = " ".join(w for w, _ in l["palavras"])
-            anterior = ls[k - 1] if k else None
-            nova = atual is None
-            if not nova and anterior is not None:
-                if l["top"] - anterior["bottom"] > altura * 0.6:
+        primeiro = True
+        regras = por_pag[pag][0]["regras"]
+        segs = _segmentos(por_pag[pag])
+        if numeros is not None:
+            solto = [s for s in segs if len(s["palavras"]) == 1 and NUMERACAO_PASSO.fullmatch(s["palavras"][0][0])]
+            numeros += [s["palavras"][0][0] for s in solto]
+            segs = [s for s in segs if s not in solto]
+        for b in _ordem_leitura(_blocos(segs, regras), regras):
+            atual = None
+            for k, s in enumerate(b["segs"]):
+                texto = " ".join(w for w, _ in s["palavras"])
+                if k:
+                    ant = b["segs"][k - 1]
+                    altura = max(s["bottom"] - s["top"], 1)
+                    nova = s["top"] - ant["bottom"] > altura * 0.6 or bool(INICIO_ITEM.match(texto))
+                else:
                     nova = True
-                elif INICIO_ITEM.match(texto):
-                    nova = True
-                elif abs(l["x0"] - anterior["x0"]) > l["largura_pag"] * 0.15 and anterior["x1"] < l["largura_pag"] * 0.8:
-                    nova = True
-            elif not nova and anterior is None:
-                # primeira linha da página: continua o parágrafo anterior só se ele não "fechou"
-                ult = atual["palavras"][-1][0] if atual["palavras"] else ""
-                if ult.endswith((".", ":", ";", "?", "!")) or INICIO_ITEM.match(texto):
-                    nova = True
-            if nova:
-                fecha()
-                atual = {"palavras": [], "pagina": pag}
-            palavras = list(l["palavras"])
-            if (atual["palavras"] and atual["palavras"][-1][0].endswith("-")
-                    and len(atual["palavras"][-1][0]) > 1
-                    and atual["palavras"][-1][0][-2].isalpha() and palavras[0][0][:1].islower()):
-                ant, cor_ant = atual["palavras"].pop()
-                palavras[0] = (ant[:-1] + palavras[0][0], cor_ant or palavras[0][1])
-            atual["palavras"].extend(palavras)
-    fecha()
+                    # primeiro bloco da página: pode continuar o parágrafo da página anterior
+                    if (primeiro and paragrafos and paragrafos[-1]["pagina"] == pag - 1
+                            and not paragrafos[-1]["palavras"][-1][0].endswith((".", ":", ";", "?", "!"))
+                            and s["palavras"][0][0][:1].islower()):
+                        atual, nova = paragrafos[-1], False
+                    primeiro = False
+                if nova:
+                    atual = {"palavras": [], "pagina": pag}
+                    paragrafos.append(atual)
+                _junta(atual, s["palavras"])
     return paragrafos
 
 
@@ -180,100 +288,139 @@ def prepara(paragrafos):
 
 
 # ---------------------------------------------------------------------- alinhar
-def pareia(base, rev):
-    """Pareia parágrafos de um bloco 'replace' por similaridade, preservando a ordem."""
-    n, m = len(base), len(rev)
-    if n * m > 250_000:  # bloco gigante: pareia só o que casa em ordem, pelo mais parecido
-        return pareia_guloso(base, rev)
-    sim = [[0.0] * m for _ in range(n)]
-    for i in range(n):
-        for j in range(m):
-            sm = SequenceMatcher(None, base[i]["tokens"], rev[j]["tokens"], autojunk=False)
-            if sm.real_quick_ratio() < LIMIAR_PAREAMENTO or sm.quick_ratio() < LIMIAR_PAREAMENTO:
-                continue
-            r = sm.ratio()
-            if r >= LIMIAR_PAREAMENTO:
-                sim[i][j] = r
-    # programação dinâmica (LCS ponderado)
-    dp = [[0.0] * (m + 1) for _ in range(n + 1)]
-    for i in range(n - 1, -1, -1):
-        for j in range(m - 1, -1, -1):
-            melhor = max(dp[i + 1][j], dp[i][j + 1])
-            if sim[i][j]:
-                melhor = max(melhor, dp[i + 1][j + 1] + sim[i][j])
-            dp[i][j] = melhor
-    i = j = 0
-    pares = []
-    while i < n and j < m:
-        if sim[i][j] and abs(dp[i][j] - (dp[i + 1][j + 1] + sim[i][j])) < 1e-9:
-            pares.append((i, j)); i += 1; j += 1
-        elif dp[i + 1][j] >= dp[i][j + 1]:
-            i += 1
-        else:
-            j += 1
-    return pares
+CONTEXTO = 10  # palavras de contexto exibidas em volta de cada mudança
 
 
-def pareia_guloso(base, rev):
-    pares, j0 = [], 0
-    for i, b in enumerate(base):
-        melhor, mj = LIMIAR_PAREAMENTO, None
-        for j in range(j0, min(len(rev), j0 + 30)):
-            r = SequenceMatcher(None, b["tokens"], rev[j]["tokens"], autojunk=False).ratio()
-            if r > melhor:
-                melhor, mj = r, j
-        if mj is not None:
-            pares.append((i, mj)); j0 = mj + 1
-    return pares
+def _achata(paragrafos):
+    """Concatena os parágrafos num fluxo único de palavras (independe de onde o texto quebra)."""
+    tokens, cores, paginas, inicio = [], [], [], []
+    for p in paragrafos:
+        for k, (t, c) in enumerate(zip(p["tokens"], p["cores"])):
+            tokens.append(t); cores.append(c); paginas.append(p["pagina"]); inicio.append(k == 0)
+    return tokens, cores, paginas, inicio
 
 
-def diff_palavras(b, r):
-    """Retorna (html, frac_cor_alteradas) do diff palavra a palavra de dois parágrafos."""
-    sm = SequenceMatcher(None, b["tokens"], r["tokens"], autojunk=False)
-    partes, alteradas, coloridas = [], 0, 0
-    for op, i1, i2, j1, j2 in sm.get_opcodes():
-        if op == "equal":
-            partes.append(html.escape(" ".join(r["tokens"][j1:j2])))
+def _texto(tokens, inicio, ini, fim):
+    """Junta palavras escapadas; parágrafo novo dentro do trecho vira quebra de linha."""
+    out = []
+    for k in range(ini, fim):
+        if inicio[k] and k > ini:
+            out.append("<br>")
+        out.append(html.escape(tokens[k]))
+    return " ".join(out).replace(" <br> ", "<br>")
+
+
+def _sem_espaco(tokens):
+    return "".join("".join(tokens).split())
+
+
+def _ignora_espacamento(ops, bt, rt):
+    """Mudanças que só diferem em espaços ("d uração" x "duração", "- >" x "->") viram 'equal'."""
+    saida, k = [], 0
+    while k < len(ops):
+        if ops[k][0] == "equal":
+            saida.append(ops[k]); k += 1
             continue
-        if i2 > i1:
-            partes.append("<del>%s</del>" % html.escape(" ".join(b["tokens"][i1:i2])))
-        if j2 > j1:
-            partes.append("<ins>%s</ins>" % html.escape(" ".join(r["tokens"][j1:j2])))
-            alteradas += j2 - j1
-            coloridas += sum(r["cores"][j1:j2])
-    frac = coloridas / alteradas if alteradas else None
-    return " ".join(partes), frac
+        # junta mudanças separadas por até 3 palavras iguais
+        fim = k
+        while fim + 2 < len(ops) and ops[fim + 1][0] == "equal" and ops[fim + 1][2] - ops[fim + 1][1] <= 3 \
+                and ops[fim + 2][0] != "equal":
+            fim += 2
+        i1, i2, j1, j2 = ops[k][1], ops[fim][2], ops[k][3], ops[fim][4]
+        if _sem_espaco(bt[i1:i2]) == _sem_espaco(rt[j1:j2]):
+            saida.append(("equal", i1, i2, j1, j2))
+        else:
+            saida.extend(ops[k:fim + 1])
+        k = fim + 1
+    # funde 'equal' vizinhos para o agrupamento por contexto
+    fund = []
+    for op in saida:
+        if fund and fund[-1][0] == "equal" and op[0] == "equal":
+            fund[-1] = ("equal", fund[-1][1], op[2], fund[-1][3], op[4])
+        else:
+            fund.append(op)
+    return fund
+
+
+def _itens_do_bloco(base, rev):
+    """Diff palavra a palavra de um trecho que difere; devolve um item por grupo de mudanças."""
+    bt, bc, bp, bi = _achata(base)
+    rt, rc, rp, ri = _achata(rev)
+    ops = _ignora_espacamento(SequenceMatcher(None, bt, rt, autojunk=False).get_opcodes(), bt, rt)
+    if all(op[0] == "equal" for op in ops):
+        return []  # só mudou a quebra de linha/parágrafo, o conteúdo é o mesmo
+
+    # agrupa mudanças separadas por poucas palavras iguais
+    grupos, atual = [], None
+    for k, op in enumerate(ops):
+        if op[0] == "equal":
+            if atual is not None and op[2] - op[1] > 2 * CONTEXTO:
+                grupos.append(atual); atual = None
+            elif atual is not None:
+                atual.append(k)
+        else:
+            if atual is None:
+                atual = []
+            atual.append(k)
+    if atual:
+        grupos.append(atual)
+
+    itens = []
+    for g in grupos:
+        g = [k for k in g]
+        while ops[g[-1]][0] == "equal":
+            g.pop()
+        partes, ins_cor, ins_tot = [], 0, 0
+        tem_ins = tem_del = False
+        pag_b = pag_r = None
+        k0 = g[0]
+        if k0 > 0 and ops[k0 - 1][0] == "equal":
+            _, a, b, c, d = ops[k0 - 1]
+            ini = max(c, d - CONTEXTO)
+            partes.append(("… " if ini > c or k0 - 1 > 0 else "") + _texto(rt, ri, ini, d))
+        for k in g:
+            op, i1, i2, j1, j2 = ops[k]
+            if op == "equal":
+                partes.append(_texto(rt, ri, j1, j2))
+                continue
+            if i2 > i1:
+                tem_del = True
+                pag_b = pag_b or bp[i1]
+                partes.append("<del>%s</del>" % _texto(bt, bi, i1, i2))
+            if j2 > j1:
+                tem_ins = True
+                pag_r = pag_r or rp[j1]
+                partes.append("<ins>%s</ins>" % _texto(rt, ri, j1, j2))
+                ins_tot += j2 - j1
+                ins_cor += sum(rc[j1:j2])
+        kf = g[-1] + 1
+        if kf < len(ops) and ops[kf][0] == "equal":
+            _, a, b, c, d = ops[kf]
+            fim = min(d, c + CONTEXTO)
+            partes.append(_texto(rt, ri, c, fim) + (" …" if fim < d or kf < len(ops) - 1 else ""))
+        # página de referência da outra versão (para itens de um lado só)
+        ref = ops[g[0]]
+        if pag_b is None and bp:
+            pag_b = bp[min(ref[1], len(bp) - 1)]
+        if pag_r is None and rp:
+            pag_r = rp[min(ref[3], len(rp) - 1)]
+        tipo = "modificado" if tem_ins and tem_del else ("adicionado" if tem_ins else "removido")
+        itens.append({"tipo": tipo,
+                      "pag_b": None if tipo == "adicionado" else pag_b,
+                      "pag_r": None if tipo == "removido" else pag_r,
+                      "html": " ".join(partes),
+                      "frac": (ins_cor / ins_tot) if ins_tot else None})
+    return itens
 
 
 def compara(base, rev):
-    ids_b = [p["chave"] for p in base]
-    ids_r = [p["chave"] for p in rev]
-    sm = SequenceMatcher(None, ids_b, ids_r, autojunk=False)
+    sm = SequenceMatcher(None, [p["chave"] for p in base], [p["chave"] for p in rev], autojunk=False)
     itens, colorido_igual = [], []
     for op, i1, i2, j1, j2 in sm.get_opcodes():
         if op == "equal":
             colorido_igual += [rev[j] for j in range(j1, j2) if rev[j]["frac_cor"] >= MARCADO]
-            continue
-        bb, rr = base[i1:i2], rev[j1:j2]
-        pares = pareia(bb, rr) if bb and rr else []
-        pb = {i: j for i, j in pares}
-        pr = {j: i for i, j in pares}
-        i = j = 0
-        while i < len(bb) or j < len(rr):
-            if i < len(bb) and i not in pb:
-                itens.append({"tipo": "removido", "pag_b": bb[i]["pagina"], "pag_r": None,
-                              "html": "<del>%s</del>" % html.escape(bb[i]["chave"]), "frac": None})
-                i += 1
-            elif j < len(rr) and j not in pr:
-                itens.append({"tipo": "adicionado", "pag_b": None, "pag_r": rr[j]["pagina"],
-                              "html": "<ins>%s</ins>" % html.escape(rr[j]["chave"]),
-                              "frac": rr[j]["frac_cor"]})
-                j += 1
-            else:
-                h, frac = diff_palavras(bb[i], rr[j])
-                itens.append({"tipo": "modificado", "pag_b": bb[i]["pagina"], "pag_r": rr[j]["pagina"],
-                              "html": h, "frac": frac})
-                i += 1; j += 1
+        else:
+            itens += _itens_do_bloco(base[i1:i2], rev[j1:j2])
     return itens, colorido_igual
 
 
@@ -316,6 +463,10 @@ document.querySelectorAll('[data-fm]').forEach(b=>b.onclick=()=>{fm=b.dataset.fm
 """
 
 
+def _chave_num(s):
+    return [int(x) for x in s.split(".")]
+
+
 def gera_html(args, itens, colorido_igual, info):
     c = Counter(i["tipo"] for i in itens)
     sem = sum(1 for i in itens if i["tipo"] != "removido" and marcacao(i) == "sem")
@@ -353,6 +504,11 @@ def gera_html(args, itens, colorido_igual, info):
         h.append("<section class='item' data-tipo='%s' data-marc='%s'><header><b>#%d</b>"
                  "<span class='tag t-%s'>%s</span><span>%s</span>%s</header><p>%s</p></section>" % (
                      it["tipo"], m, k, it["tipo"], it["tipo"], " · ".join(pags), rot, it["html"]))
+    if info["num_so_base"] or info["num_so_rev"]:
+        h.append("<h2>Numeração de passos</h2><p class='sub'>Números de passo (ex.: 8.4.1.1) que existem "
+                 "só em uma das versões. Ficam fora da lista acima porque ocupam coluna própria.</p>")
+        h.append("<p><b>Só na base (%d):</b> %s</p>" % (len(info["num_so_base"]), html.escape(", ".join(info["num_so_base"])) or "&mdash;"))
+        h.append("<p><b>Só na revisada (%d):</b> %s</p>" % (len(info["num_so_rev"]), html.escape(", ".join(info["num_so_rev"])) or "&mdash;"))
     h.append("<h2>Cabeçalhos/rodapés removidos</h2><details><summary>Linhas detectadas (padrão normalizado)</summary><ul>")
     for linha in sorted(info["removidas"]):
         h.append("<li>%s</li>" % html.escape(linha))
@@ -365,7 +521,11 @@ def processa(caminho, workers, ignorar):
     n, linhas = extrai_linhas(caminho, workers)
     linhas = [l for l in linhas if l["pagina"] > ignorar]
     linhas, removidas = remove_repetidas(linhas, n - ignorar)
-    return n, prepara(monta_paragrafos(linhas)), removidas
+    # a numeração de passo fica em coluna própria e muda de posição entre as versões:
+    # sai do fluxo de texto e é comparada em separado
+    numeros = []
+    paragrafos = prepara(monta_paragrafos(linhas, numeros))
+    return n, paragrafos, removidas, numeros
 
 
 def main():
@@ -379,12 +539,14 @@ def main():
     args = ap.parse_args()
 
     print("Extraindo base...", file=sys.stderr)
-    n_b, base, rem_b = processa(args.base, args.workers, args.ignorar_paginas)
+    n_b, base, rem_b, num_b = processa(args.base, args.workers, args.ignorar_paginas)
     print("Extraindo revisada...", file=sys.stderr)
-    n_r, rev, rem_r = processa(args.revisada, args.workers, args.ignorar_paginas)
+    n_r, rev, rem_r, num_r = processa(args.revisada, args.workers, args.ignorar_paginas)
     print("Comparando %d x %d parágrafos..." % (len(base), len(rev)), file=sys.stderr)
     itens, colorido_igual = compara(base, rev)
-    info = {"n_b": n_b, "n_r": n_r, "removidas": rem_b | rem_r}
+    info = {"n_b": n_b, "n_r": n_r, "removidas": rem_b | rem_r,
+            "num_so_base": sorted(set(num_b) - set(num_r), key=_chave_num),
+            "num_so_rev": sorted(set(num_r) - set(num_b), key=_chave_num)}
     with open(args.saida, "w", encoding="utf-8") as f:
         f.write(gera_html(args, itens, colorido_igual, info))
     c = Counter(i["tipo"] for i in itens)
