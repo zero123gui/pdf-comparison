@@ -105,7 +105,7 @@ def remove_repetidas(linhas, n_paginas):
 # ------------------------------------------------------------------- parágrafos
 # vão horizontal (pt) que separa colunas sem borda desenhada; as células de tabela são separadas
 # pelas bordas verticais, e texto justificado em célula estreita pode ter vãos grandes entre palavras
-VAO_COLUNA = 60
+VAO_COLUNA = 110
 
 
 def _borda_vertical(l, xa, xb):
@@ -479,7 +479,7 @@ h2{font-size:17px;margin:28px 0 6px}details{margin:8px 0}summary{cursor:pointer;
 """
 
 JS = """
-const itens=[...document.querySelectorAll('.item')];let ft='todos',fm='todas';
+const itens=[...document.querySelectorAll('.item')];let ft='todos',fm='marcado';
 function aplica(){let n=0;itens.forEach(e=>{const ok=(ft==='todos'||e.dataset.tipo===ft)&&(fm==='todas'||e.dataset.marc===fm);e.hidden=!ok;if(ok)n++});document.getElementById('n').textContent=n}
 document.querySelectorAll('[data-ft]').forEach(b=>b.onclick=()=>{ft=b.dataset.ft;document.querySelectorAll('[data-ft]').forEach(x=>x.classList.toggle('on',x===b));aplica()});
 document.querySelectorAll('[data-fm]').forEach(b=>b.onclick=()=>{fm=b.dataset.fm;document.querySelectorAll('[data-fm]').forEach(x=>x.classList.toggle('on',x===b));aplica()});aplica();
@@ -509,11 +509,14 @@ def gera_html(args, itens, colorido_igual, info):
     h.append("</div><p class='sub'>&ldquo;Alterados sem cor&rdquo;: o texto mudou entre as versões mas não está "
              "marcado na revisada &mdash; vale conferir. &ldquo;Coloridos sem diferença&rdquo;: texto marcado em "
              "cor que é idêntico à base (marcação herdada de revisões anteriores).</p>")
+    h.append("<p class='sub'>Por padrão são exibidos só os itens <b>marcados em cor</b> na versão revisada. "
+             "Use &ldquo;Qualquer marcação&rdquo; para ver também os sem cor e as remoções (texto removido "
+             "não pode estar colorido).</p>")
     h.append("<div class='bar'>"
              "<button class='on' data-ft='todos'>Todos</button><button data-ft='adicionado'>Adicionados</button>"
              "<button data-ft='removido'>Removidos</button><button data-ft='modificado'>Modificados</button><i></i>"
-             "<button class='on' data-fm='todas'>Qualquer marcação</button><button data-fm='sem'>Sem cor</button>"
-             "<button data-fm='parcial'>Parcial</button><button data-fm='marcado'>Marcado</button>"
+             "<button data-fm='todas'>Qualquer marcação</button><button data-fm='sem'>Sem cor</button>"
+             "<button data-fm='parcial'>Parcial</button><button class='on' data-fm='marcado'>Marcado em cor</button>"
              "<span style='margin-left:auto;color:var(--mut);font-size:13px;align-self:center'><span id='n'></span> itens</span></div>")
     for k, it in enumerate(itens, 1):
         m = marcacao(it)
@@ -560,6 +563,8 @@ def main():
     ap.add_argument("--saida", default="relatorio.html")
     ap.add_argument("--ignorar-paginas", type=int, default=0,
                     help="ignora as N primeiras páginas de cada PDF (capa, tabela de revisões)")
+    ap.add_argument("--somente-marcados", action="store_true",
+                    help="o relatório traz apenas os itens marcados em cor na versão revisada")
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args()
 
@@ -569,6 +574,8 @@ def main():
     n_r, rev, rem_r, num_r = processa(args.revisada, args.workers, args.ignorar_paginas)
     print("Comparando %d x %d parágrafos..." % (len(base), len(rev)), file=sys.stderr)
     itens, colorido_igual = compara(base, rev)
+    if args.somente_marcados:
+        itens = [i for i in itens if marcacao(i) == "marcado"]
     info = {"n_b": n_b, "n_r": n_r, "removidas": rem_b | rem_r,
             "num_so_base": sorted(set(num_b) - set(num_r), key=_chave_num),
             "num_so_rev": sorted(set(num_r) - set(num_b), key=_chave_num)}

@@ -7,7 +7,7 @@ pip install -r requirements.txt
 python pdf_diff.py --base ITAB.pdf --revisada ITAC.pdf --saida relatorio.html
 ```
 
-Opções: `--ignorar-paginas N` (descarta as primeiras páginas; para ITAB/ITAC use `1`, a capa), `--workers N`.
+Opções: `--ignorar-paginas N` (descarta as primeiras páginas; para ITAB/ITAC use `1`, a capa), `--somente-marcados` (só itens marcados em cor), `--workers N`.
 
 Etapas: extrai o texto -> remove cabeçalho/rodapé (linhas de margem repetidas) -> lê a página por
 blocos (colunas/células de tabela, usando as bordas desenhadas) e monta parágrafos -> alinha os
