@@ -221,3 +221,6 @@ __marimo__/
 
 # Relatórios gerados
 relatorio*.html
+
+# Dados do servidor web (PDFs temporários e relatórios)
+data/

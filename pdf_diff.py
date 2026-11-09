@@ -14,6 +14,7 @@ import sys
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from difflib import SequenceMatcher
+from types import SimpleNamespace
 
 import pdfplumber
 
@@ -556,6 +557,53 @@ def processa(caminho, workers, ignorar):
     return n, paragrafos, removidas, numeros
 
 
+class ErroComparacao(Exception):
+    """Falha esperada (PDF ilegível, sem texto...) com mensagem própria para o usuário."""
+
+
+def _le_pdf(caminho, nome, workers, ignorar):
+    try:
+        resultado = processa(caminho, workers, ignorar)
+    except Exception as exc:  # pdfplumber/pdfminer levantam vários tipos para PDF corrompido
+        raise ErroComparacao("Não foi possível ler o PDF \u00ab%s\u00bb: o arquivo parece corrompido ou "
+                             "protegido por senha." % nome) from exc
+    if not resultado[1]:
+        raise ErroComparacao("O PDF \u00ab%s\u00bb não tem texto para comparar (pode ser um documento escaneado)." % nome)
+    return resultado
+
+
+def comparar_pdfs(base, revisada, ignorar_paginas=0, somente_marcados=False, workers=4,
+                  progresso=None, nome_base=None, nome_revisada=None):
+    """Compara dois PDFs e devolve {'html': ..., 'totais': {...}}.
+
+    progresso(etapa, fracao) é chamado a cada etapa (fracao de 0 a 1).
+    Levanta ErroComparacao quando um dos PDFs não pode ser lido ou não tem texto.
+    """
+    def avisa(etapa, fracao):
+        if progresso:
+            progresso(etapa, fracao)
+
+    nome_base, nome_revisada = nome_base or base, nome_revisada or revisada
+    avisa("Lendo a versão base", 0.02)
+    n_b, texto_b, rem_b, num_b = _le_pdf(base, nome_base, workers, ignorar_paginas)
+    avisa("Lendo a versão revisada", 0.40)
+    n_r, texto_r, rem_r, num_r = _le_pdf(revisada, nome_revisada, workers, ignorar_paginas)
+    avisa("Comparando os textos", 0.80)
+    itens, colorido_igual = compara(texto_b, texto_r)
+    if somente_marcados:
+        itens = [i for i in itens if marcacao(i) == "marcado"]
+    avisa("Montando o relatório", 0.95)
+    info = {"n_b": n_b, "n_r": n_r, "removidas": rem_b | rem_r,
+            "num_so_base": sorted(set(num_b) - set(num_r), key=_chave_num),
+            "num_so_rev": sorted(set(num_r) - set(num_b), key=_chave_num)}
+    nomes = SimpleNamespace(base=nome_base, revisada=nome_revisada)
+    totais = dict(Counter(i["tipo"] for i in itens))
+    totais["itens"] = len(itens)
+    totais["marcados"] = sum(1 for i in itens if marcacao(i) == "marcado")
+    totais["paginas_base"], totais["paginas_revisada"] = n_b, n_r
+    return {"html": gera_html(nomes, itens, colorido_igual, info), "totais": totais}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", required=True, help="PDF da versão base")
@@ -568,21 +616,16 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args()
 
-    print("Extraindo base...", file=sys.stderr)
-    n_b, base, rem_b, num_b = processa(args.base, args.workers, args.ignorar_paginas)
-    print("Extraindo revisada...", file=sys.stderr)
-    n_r, rev, rem_r, num_r = processa(args.revisada, args.workers, args.ignorar_paginas)
-    print("Comparando %d x %d parágrafos..." % (len(base), len(rev)), file=sys.stderr)
-    itens, colorido_igual = compara(base, rev)
-    if args.somente_marcados:
-        itens = [i for i in itens if marcacao(i) == "marcado"]
-    info = {"n_b": n_b, "n_r": n_r, "removidas": rem_b | rem_r,
-            "num_so_base": sorted(set(num_b) - set(num_r), key=_chave_num),
-            "num_so_rev": sorted(set(num_r) - set(num_b), key=_chave_num)}
+    try:
+        resultado = comparar_pdfs(
+            args.base, args.revisada, args.ignorar_paginas, args.somente_marcados, args.workers,
+            progresso=lambda etapa, _fracao: print(etapa + "...", file=sys.stderr))
+    except ErroComparacao as erro:
+        sys.exit("Erro: %s" % erro)
     with open(args.saida, "w", encoding="utf-8") as f:
-        f.write(gera_html(args, itens, colorido_igual, info))
-    c = Counter(i["tipo"] for i in itens)
-    print("Pronto: %s (%s)" % (args.saida, dict(c)), file=sys.stderr)
+        f.write(resultado["html"])
+    print("Pronto: %s (%s)" % (args.saida, {k: v for k, v in resultado["totais"].items()
+                                           if k in ("adicionado", "removido", "modificado")}), file=sys.stderr)
 
 
 if __name__ == "__main__":

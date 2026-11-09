@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Comparador de PDFs</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body data-max-mb="{{ max_mb }}" data-ttl-horas="{{ ttl_horas }}">
+  <header class="topo">
+    <div class="miolo">
+      <h1>Comparador de PDFs</h1>
+      <p>Envie a versão base e a versão revisada de um documento e veja só o que mudou.</p>
+    </div>
+  </header>
+
+  <main class="miolo">
+    <div id="aviso" class="aviso" role="alert" hidden></div>
+
+    <section id="tela-envio" aria-labelledby="titulo-envio">
+      <h2 id="titulo-envio" class="so-leitor">Enviar os documentos</h2>
+      <form id="formulario" novalidate>
+        <div class="arquivos">
+          <label class="zona" id="zona-base" for="arq-base">
+            <span class="zona-rotulo">Versão base</span>
+            <span class="zona-dica">A versão anterior do documento</span>
+            <span class="zona-estado" data-vazio="Arraste o PDF aqui ou clique para escolher"></span>
+            <input class="so-leitor" type="file" id="arq-base" name="base" accept="application/pdf,.pdf">
+          </label>
+          <label class="zona" id="zona-revisada" for="arq-revisada">
+            <span class="zona-rotulo">Versão revisada</span>
+            <span class="zona-dica">A versão nova, com as alterações</span>
+            <span class="zona-estado" data-vazio="Arraste o PDF aqui ou clique para escolher"></span>
+            <input class="so-leitor" type="file" id="arq-revisada" name="revisada" accept="application/pdf,.pdf">
+          </label>
+        </div>
+
+        <fieldset class="opcoes">
+          <legend>Opções</legend>
+          <div class="campo">
+            <label for="ignorar">Páginas iniciais a ignorar</label>
+            <input type="number" id="ignorar" name="ignorar_paginas" min="0" max="50" value="{{ ignorar }}">
+            <small>Descarta as primeiras páginas de cada PDF, como a capa. Use 0 para comparar tudo.</small>
+          </div>
+          <div class="campo">
+            <label class="marca"><input type="checkbox" id="somente" name="somente_marcados"> Mostrar só o que está marcado em cor</label>
+            <small>Esconde as diferenças que não estão coloridas na versão revisada.</small>
+          </div>
+        </fieldset>
+
+        <div class="rodape-form">
+          <button type="submit" id="btn-comparar" class="primario" disabled>Comparar</button>
+          <p class="nota">Os PDFs são apagados assim que a comparação termina. O relatório fica disponível por
+            {{ ttl_horas }} horas para quem tiver o link. Limite de {{ max_mb }} MB por arquivo.</p>
+        </div>
+      </form>
+    </section>
+
+    <section id="tela-andamento" aria-labelledby="titulo-andamento" hidden>
+      <h2 id="titulo-andamento">Comparando os documentos</h2>
+      <p id="etapa" class="etapa" aria-live="polite">Enviando os arquivos…</p>
+      <progress id="barra" max="100" value="0" aria-label="Andamento da comparação"></progress>
+      <p class="nota">Costuma levar de 20 segundos a alguns minutos. Você pode atualizar a página ou fechar e voltar
+        pelo mesmo endereço: o trabalho continua no servidor.</p>
+      <button type="button" id="btn-cancelar" class="secundario">Cancelar</button>
+    </section>
+
+    <section id="tela-relatorio" aria-labelledby="titulo-relatorio" hidden>
+      <div class="cabeca-relatorio">
+        <div>
+          <h2 id="titulo-relatorio">Resultado</h2>
+          <p id="resumo" class="resumo"></p>
+          <p id="validade" class="nota"></p>
+        </div>
+        <div class="acoes">
+          <a id="lnk-aba" class="botao" target="_blank" rel="noopener">Abrir em nova aba</a>
+          <a id="lnk-baixar" class="botao">Baixar HTML</a>
+          <button type="button" id="btn-nova" class="primario">Nova comparação</button>
+          <button type="button" id="btn-apagar" class="secundario">Apagar agora</button>
+        </div>
+      </div>
+      <iframe id="quadro" title="Relatório de comparação" sandbox="allow-scripts"></iframe>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</body>
+</html>
