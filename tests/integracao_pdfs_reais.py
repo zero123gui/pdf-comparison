@@ -1,4 +1,7 @@
-"""Integração com os PDFs do repositório (ITAB x ITAC), cerca de 45 s.
+"""Integração com dois PDFs reais (ITAB x ITAC), cerca de 45 s.
+
+Os PDFs são internos e ficam fora do Git: copie ITAB.pdf e ITAC.pdf para a pasta do projeto.
+Sem eles o teste é pulado.
 
 Não roda junto com os demais testes. Para rodar:  python -m unittest tests.integracao_pdfs_reais
 """

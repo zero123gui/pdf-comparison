@@ -82,16 +82,20 @@ Sem instalar nada além do `requirements.txt`:
 
 ```bash
 python -m unittest                              # rápidos, cerca de 6 s
-python -m unittest tests.integracao_pdfs_reais  # com os PDFs ITAB/ITAC, cerca de 45 s
+python -m unittest tests.integracao_pdfs_reais  # com PDFs reais (veja abaixo), cerca de 45 s
 ```
+
+O teste `tests.integracao_pdfs_reais` usa dois PDFs reais, `ITAB.pdf` e `ITAC.pdf`, que ficam **fora do Git**
+(`*.pdf` está no `.gitignore`, porque são documentos internos). Copie os dois para a pasta do projeto para rodá-lo;
+sem eles o teste é pulado.
 
 ## Linha de comando
 
 ```bash
-python pdf_diff.py --base ITAB.pdf --revisada ITAC.pdf --saida relatorio.html --ignorar-paginas 1
+python pdf_diff.py --base documento_base.pdf --revisada documento_revisado.pdf --saida relatorio.html --ignorar-paginas 1
 ```
 
-Opções: `--ignorar-paginas N` (descarta as primeiras páginas; para ITAB/ITAC use `1`, a capa),
+Opções: `--ignorar-paginas N` (descarta as primeiras páginas; use `1` para pular a capa),
 `--somente-marcados` (só itens marcados em cor), `--workers N`.
 
 ## Como a comparação funciona

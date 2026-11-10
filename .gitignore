@@ -9,3 +9,6 @@ data/
 
 # Relatórios HTML gerados pelo pdf_diff.py
 relatorio*.html
+
+# PDFs: os documentos comparados são internos e não vão para o Git
+*.pdf

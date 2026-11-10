@@ -5,7 +5,7 @@ Etapas: extrai o texto -> remove cabeçalho/rodapé -> monta parágrafos ->
 alinha parágrafos -> diff (parágrafo e palavra) -> verifica contra a cor do texto.
 
 Uso:
-    python pdf_diff.py --base ITAB.pdf --revisada ITAC.pdf --saida relatorio.html
+    python pdf_diff.py --base documento_base.pdf --revisada documento_revisado.pdf --saida relatorio.html
 """
 import argparse
 import html
