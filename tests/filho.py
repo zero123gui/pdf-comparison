@@ -1,18 +1,22 @@
-def cria_app_no_filho(data_dir):
-    """Reproduz um processo de comparação (spawn) que importa e cria a aplicação."""
-    from webapp import create_app
-    create_app({"TESTING": True, "DATA_DIR": data_dir})
+"""Funções que rodam dentro de processos filhos (spawn) nos testes."""
 
 
-def trabalho_lento(pasta, workers):
+def cria_app_no_filho(pasta_dados):
+    """Reproduz um processo de comparação que importa o servidor e o inicializa."""
+    import servidor
+    servidor.PASTA_DADOS = __import__("pathlib").Path(pasta_dados)
+    servidor.inicia()
+
+
+def comparacao_lenta(pasta, leitores):
     """Comparação de mentira: cria um neto (como o leitor de páginas) e fica esperando."""
     import subprocess
     import time
     from pathlib import Path
 
-    from webapp import worker
-    worker.novo_grupo()
-    neto = subprocess.Popen(["sleep", "120"])
+    import servidor
+    servidor.novo_grupo()
+    neto = subprocess.Popen([__import__("sys").executable, "-c", "import time; time.sleep(120)"])
     (Path(pasta) / "neto.pid").write_text(str(neto.pid))
-    worker.escreve_status(pasta, status="executando", etapa="Lento", progresso=0.1)
+    servidor.escreve_status(pasta, status="executando", etapa="Lento", progresso=0.1)
     time.sleep(120)

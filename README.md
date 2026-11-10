@@ -3,38 +3,49 @@
 Compara duas versões de um PDF (base x revisada) e mostra só o que mudou no conteúdo, num relatório HTML.
 Funciona como linha de comando e como sistema web.
 
+## Arquivos
+
+| Arquivo | O que é |
+| --- | --- |
+| `servidor.py` | O sistema web, num arquivo só, no estilo do `mock_server.py`: Flask, constantes no topo e `app.run(...)` no final |
+| `pdf_diff.py` | O motor da comparação, que também funciona como linha de comando |
+| `templates/`, `static/` | A página (HTML, CSS e JavaScript puros, sem etapa de build) |
+| `tests/` | Testes automáticos |
+
+## Bibliotecas externas
+
+Só duas, e nenhuma é opcional:
+
+- **Flask**: o servidor web (o mesmo do `mock_server.py`).
+- **pdfplumber**: lê o texto, a posição, a cor e as bordas de tabela dos PDFs. Não há como comparar PDFs sem uma biblioteca que leia PDF.
+
+Todo o resto é biblioteca padrão do Python. Os testes usam `unittest`, e o servidor é o próprio do Flask
+(sem `gunicorn`). O `pip` instala também as dependências dessas duas (13 pacotes no total).
+
 ## Sistema web
 
 Abre no navegador, recebe os dois PDFs, compara em segundo plano e mostra o relatório na própria página.
 
-### Rodar localmente
-
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python run.py            # http://127.0.0.1:5000
+python -m venv .venv
+.venv\Scripts\activate             # Windows (no Linux/Mac: source .venv/bin/activate)
+pip install -r requirements.txt
+python servidor.py                 # http://localhost:8080
 ```
 
-`run.py` é só para desenvolvimento.
-
-### Rodar em servidor
-
-```bash
-.venv/bin/gunicorn -c gunicorn.conf.py wsgi:app     # escuta em 0.0.0.0:8000
-```
-
-O `gunicorn.conf.py` usa **um processo com várias threads** de propósito: o limite de comparações
-simultâneas e a fila ficam corretos sem coordenação entre processos. O trabalho pesado roda em
-processos próprios, um por comparação. Há um `Dockerfile` (ainda não testado: o ambiente de
-desenvolvimento não tinha o daemon do Docker).
-
-O sistema **não tem login**. Deixe-o na rede interna ou atrás de um proxy com autenticação.
+Para outras máquinas da rede acessarem, defina `HOST=0.0.0.0` (por padrão só a própria máquina acessa).
+O servidor é o do Flask, como no `mock_server.py`: serve bem para uso interno com poucos usuários. O sistema
+**não tem login**; deixe-o na rede interna ou atrás de um proxy com autenticação. O estado e a fila ficam num
+único processo, então rode uma só instância.
 
 ### Configuração (variáveis de ambiente)
 
+Os valores também aparecem como constantes no topo do `servidor.py`.
+
 | Variável | Padrão | O que controla |
 | --- | --- | --- |
-| `PDFDIFF_DATA_DIR` | `./data` | Pasta dos trabalhos (PDFs temporários e relatórios) |
+| `HOST`, `PORT` | `localhost`, `8080` | Endereço do servidor |
+| `PDFDIFF_DATA_DIR` | `./data` | Pasta das comparações (PDFs temporários e relatórios) |
 | `PDFDIFF_MAX_FILE_MB` | 60 | Tamanho máximo de cada PDF |
 | `PDFDIFF_MAX_CONCURRENT` | 2 | Comparações ao mesmo tempo |
 | `PDFDIFF_MAX_QUEUE` | 6 | Quantas esperam na fila; além disso a resposta é `429` |
@@ -42,44 +53,49 @@ O sistema **não tem login**. Deixe-o na rede interna ou atrás de um proxy com 
 | `PDFDIFF_TTL_HORAS` | 24 | Quanto tempo o relatório fica disponível |
 | `PDFDIFF_WORKERS` | 4 | Processos de leitura de páginas dentro de cada comparação |
 | `PDFDIFF_IGNORAR_PAGINAS` | 1 | Valor inicial do campo «páginas iniciais a ignorar» |
-| `HOST`, `PORT` | `0.0.0.0`, `8000` | Endereço do gunicorn |
 
 Dimensione `PDFDIFF_WORKERS` pelos núcleos do servidor: `núcleos / PDFDIFF_MAX_CONCURRENT`. Com 4 núcleos
-e 2 comparações simultâneas, cada uma leva cerca de 45 s em vez dos 20 s de uma comparação sozinha.
+e 2 comparações simultâneas, cada uma leva cerca de 45 s em vez dos 20 s de uma comparação sozinha. Cada
+comparação usa até cerca de 1 GB de memória.
 
 ### Rotas
 
 | Rota | Método | O que faz |
 | --- | --- | --- |
 | `/` | GET | Página do sistema |
-| `/api/jobs` | POST | Recebe `base`, `revisada`, `ignorar_paginas`, `somente_marcados`; devolve `202` com o `id` |
-| `/api/jobs/<id>` | GET | Andamento: `status` (`na_fila`, `executando`, `concluido`, `erro`), `etapa`, `progresso` |
-| `/jobs/<id>/relatorio` | GET | Relatório pronto (`?baixar=1` baixa o arquivo) |
-| `/api/jobs/<id>` | DELETE | Apaga o trabalho agora (cancela se estiver rodando) |
+| `/api/comparacoes` | POST | Recebe `base`, `revisada`, `ignorar_paginas`, `somente_marcados`; devolve `202` com o `id` |
+| `/api/comparacoes/<id>/andamento` | GET | Andamento: `status` (`na_fila`, `executando`, `concluido`, `erro`), `etapa`, `progresso` |
+| `/comparacoes/<id>/relatorio` | GET | Relatório pronto (`?baixar=1` baixa o arquivo) |
+| `/api/comparacoes/<id>` | DELETE | Apaga a comparação agora (cancela se estiver rodando) |
 | `/saude` | GET | `ok`, para monitoramento |
 
 ### Privacidade
 
-Os PDFs enviados são apagados pelo próprio processo de comparação antes de o trabalho ser dado como
-concluído. O relatório e o estado ficam em `PDFDIFF_DATA_DIR/jobs/<id>/` e são removidos depois do prazo
-(`PDFDIFF_TTL_HORAS`) ou quando o usuário apaga. O `id` tem 128 bits aleatórios; não há listagem de trabalhos.
+Os PDFs enviados são apagados pelo próprio processo de comparação antes de a comparação ser dada como
+concluída. O relatório e o estado ficam em `PDFDIFF_DATA_DIR/comparacoes/<id>/` e são removidos depois do prazo
+(`PDFDIFF_TTL_HORAS`) ou quando o usuário apaga. O `id` tem 128 bits aleatórios; não há listagem de comparações.
 Os logs registram id, tamanhos e tempos, nunca o conteúdo dos PDFs.
 
 ### Testes
 
+Sem instalar nada além do `requirements.txt`:
+
 ```bash
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest              # rápidos, cerca de 6 s
-.venv/bin/python -m pytest -m lento     # com os PDFs ITAB/ITAC, cerca de 45 s
+python -m unittest                              # rápidos, cerca de 6 s
+python -m unittest tests.integracao_pdfs_reais  # com PDFs reais (veja abaixo), cerca de 45 s
 ```
+
+O teste `tests.integracao_pdfs_reais` usa dois PDFs reais, `ITAB.pdf` e `ITAC.pdf`, que ficam **fora do Git**
+(`*.pdf` está no `.gitignore`, porque são documentos internos). Copie os dois para a pasta do projeto para rodá-lo;
+sem eles o teste é pulado.
 
 ## Linha de comando
 
 ```bash
-python pdf_diff.py --base ITAB.pdf --revisada ITAC.pdf --saida relatorio.html --ignorar-paginas 1
+python pdf_diff.py --base documento_base.pdf --revisada documento_revisado.pdf --saida relatorio.html --ignorar-paginas 1
 ```
 
-Opções: `--ignorar-paginas N` (descarta as primeiras páginas; para ITAB/ITAC use `1`, a capa),
+Opções: `--ignorar-paginas N` (descarta as primeiras páginas; use `1` para pular a capa),
 `--somente-marcados` (só itens marcados em cor), `--workers N`.
 
 ## Como a comparação funciona

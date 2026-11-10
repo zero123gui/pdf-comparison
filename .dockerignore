@@ -1,7 +1,0 @@
-.git
-.venv
-data
-tests
-*.pdf
-relatorio*.html
-__pycache__
