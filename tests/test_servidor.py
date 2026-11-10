@@ -3,6 +3,7 @@ import json
 import multiprocessing
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -27,11 +28,18 @@ class Base(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         servidor.inicia()
+        self.addCleanup(self._espera_supervisao)  # roda antes de apagar a pasta temporária
         servidor.app.config["TESTING"] = True
         self.cliente = servidor.app.test_client()
         self.pasta_comparacoes = self.pasta_dados / "comparacoes"
 
     # ---------------------------------------------------------------- utilitários
+    @staticmethod
+    def _espera_supervisao(limite=15):
+        fim = time.time() + limite
+        while servidor._ativos and time.time() < fim:
+            time.sleep(0.05)
+
     def envia(self, base=None, revisada=None, **campos):
         dados = {"base": (io.BytesIO(base or pdf_simples(BASE)), "base.pdf"),
                  "revisada": (io.BytesIO(revisada or pdf_simples(REVISADA, azuis={1, 2})), "revisada.pdf")}
@@ -229,6 +237,35 @@ class TestEncerramento(Base):
         id_comparacao, neto = self._sobe_comparacao_lenta()
         self.assertEqual(self.espera(id_comparacao, 30)["status"], "erro")
         self._espera_morrer(neto)
+
+    def test_apagar_com_processo_rodando_nao_deixa_a_comparacao_para_tras(self):
+        """Regressão: a supervisão gravava um status novo na pasta que estava sendo apagada.
+
+        O defeito real é uma corrida (a supervisão acorda no meio da remoção da pasta). Para
+        reproduzir sempre, o último passo da remoção é atrasado e a supervisão usa um estado lido
+        antes de a pasta ser apagada, de modo que ela tenta gravar com a pasta já sem status.json."""
+        real_rmdir, real_estado = os.rmdir, servidor.estado
+
+        def rmdir_lento(*args, **kwargs):
+            time.sleep(1.0)
+            return real_rmdir(*args, **kwargs)
+
+        def estado_lento_na_supervisao(id_comparacao):
+            valor = real_estado(id_comparacao)  # lido antes de a pasta ser apagada...
+            if threading.current_thread().name.startswith("supervisor-"):
+                time.sleep(0.5)                 # ...e usado só depois, quando já não vale
+            return valor
+
+        with mock.patch.object(servidor, "TEMPO_MAX_S", 600):
+            id_comparacao, _ = self._sobe_comparacao_lenta()
+            with mock.patch.object(os, "rmdir", rmdir_lento), \
+                    mock.patch.object(servidor, "estado", estado_lento_na_supervisao):
+                self.assertEqual(self.cliente.delete("/api/comparacoes/" + id_comparacao).status_code, 204)
+                fim = time.time() + 10
+                while servidor._ativos and time.time() < fim:  # espera a supervisão terminar
+                    time.sleep(0.05)
+            self.assertFalse(servidor.pasta_do(id_comparacao).exists())
+            self.assertEqual(self.cliente.get("/api/comparacoes/%s/andamento" % id_comparacao).status_code, 404)
 
     def test_cancelar_mata_tambem_os_filhos(self):
         with mock.patch.object(servidor, "TEMPO_MAX_S", 600):

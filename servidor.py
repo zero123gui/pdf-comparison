@@ -60,6 +60,7 @@ _trava = threading.Lock()
 _semaforo = threading.BoundedSemaphore(MAX_SIMULTANEAS)
 _ativos = 0          # na fila + executando
 _processos = {}      # id da comparação -> processo que a executa
+_canceladas = set()  # ids apagados pelo usuário com o processo ainda rodando
 
 
 class AppException(Exception):
@@ -230,7 +231,12 @@ def supervisiona(id_comparacao):
                         break
             finally:
                 _processos.pop(id_comparacao, None)
-            if pasta.exists() and estado(id_comparacao).get("status") not in TERMINAIS:
+            if id_comparacao in _canceladas:  # o usuário apagou: nada a registrar nem a escrever
+                return
+            final = estado(id_comparacao)
+            # {} = a pasta já foi apagada (ou está sendo): não há nada a registrar. Só um status que
+            # existe e não é final significa que o processo morreu sem terminar.
+            if final and final.get("status") not in TERMINAIS:
                 escreve_status(pasta, status="erro", etapa="Erro", erro=(
                     "O processamento terminou de forma inesperada (talvez faltou memória). "
                     "Tente novamente com arquivos menores."))
@@ -240,6 +246,7 @@ def supervisiona(id_comparacao):
         log.exception("falha ao supervisionar a comparação %s", id_comparacao[:8])
         escreve_status(pasta, status="erro", etapa="Erro", erro="Erro interno do servidor.")
     finally:
+        _canceladas.discard(id_comparacao)
         apaga_entradas(pasta)  # garantia extra: nada do que foi enviado fica guardado
         libera_vaga()
 
@@ -251,8 +258,14 @@ def remove_comparacao(id_comparacao):
         return False
     proc = _processos.get(id_comparacao)
     if proc is not None and proc.is_alive():
+        # Marca antes de matar: sem isso, a thread de supervisão veria o processo morto e a
+        # pasta sem status.json e gravaria um erro novo dentro da pasta que está sendo apagada.
+        _canceladas.add(id_comparacao)
         encerra(proc)
-    shutil.rmtree(pasta, ignore_errors=True)
+    for _ in range(3):  # tenta de novo se alguma escrita tardia recriou algo
+        shutil.rmtree(pasta, ignore_errors=True)
+        if not pasta.exists():
+            break
     return True
 
 
