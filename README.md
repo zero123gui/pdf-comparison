@@ -76,10 +76,6 @@ concluído. O relatório e o estado ficam em `PDFDIFF_DATA_DIR/jobs/<id>/` e sã
 (`PDFDIFF_TTL_HORAS`) ou quando o usuário apaga. O `id` tem 128 bits aleatórios; não há listagem de trabalhos.
 Os logs registram id, tamanhos e tempos, nunca o conteúdo dos PDFs.
 
-### Docker
-
-Há um `Dockerfile` (ainda não testado: o ambiente de desenvolvimento não tinha o daemon do Docker).
-
 ### Testes
 
 Sem instalar nada além do `requirements.txt`:
