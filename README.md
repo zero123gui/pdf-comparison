@@ -45,7 +45,7 @@ Os valores também aparecem como constantes no topo do `servidor.py`.
 | Variável | Padrão | O que controla |
 | --- | --- | --- |
 | `HOST`, `PORT` | `localhost`, `8080` | Endereço do servidor |
-| `PDFDIFF_DATA_DIR` | `./data` | Pasta dos trabalhos (PDFs temporários e relatórios) |
+| `PDFDIFF_DATA_DIR` | `./data` | Pasta das comparações (PDFs temporários e relatórios) |
 | `PDFDIFF_MAX_FILE_MB` | 60 | Tamanho máximo de cada PDF |
 | `PDFDIFF_MAX_CONCURRENT` | 2 | Comparações ao mesmo tempo |
 | `PDFDIFF_MAX_QUEUE` | 6 | Quantas esperam na fila; além disso a resposta é `429` |
@@ -63,17 +63,17 @@ comparação usa até cerca de 1 GB de memória.
 | Rota | Método | O que faz |
 | --- | --- | --- |
 | `/` | GET | Página do sistema |
-| `/api/jobs` | POST | Recebe `base`, `revisada`, `ignorar_paginas`, `somente_marcados`; devolve `202` com o `id` |
-| `/api/jobs/<id>` | GET | Andamento: `status` (`na_fila`, `executando`, `concluido`, `erro`), `etapa`, `progresso` |
-| `/jobs/<id>/relatorio` | GET | Relatório pronto (`?baixar=1` baixa o arquivo) |
-| `/api/jobs/<id>` | DELETE | Apaga o trabalho agora (cancela se estiver rodando) |
+| `/api/comparacoes` | POST | Recebe `base`, `revisada`, `ignorar_paginas`, `somente_marcados`; devolve `202` com o `id` |
+| `/api/comparacoes/<id>/andamento` | GET | Andamento: `status` (`na_fila`, `executando`, `concluido`, `erro`), `etapa`, `progresso` |
+| `/comparacoes/<id>/relatorio` | GET | Relatório pronto (`?baixar=1` baixa o arquivo) |
+| `/api/comparacoes/<id>` | DELETE | Apaga a comparação agora (cancela se estiver rodando) |
 | `/saude` | GET | `ok`, para monitoramento |
 
 ### Privacidade
 
-Os PDFs enviados são apagados pelo próprio processo de comparação antes de o trabalho ser dado como
-concluído. O relatório e o estado ficam em `PDFDIFF_DATA_DIR/jobs/<id>/` e são removidos depois do prazo
-(`PDFDIFF_TTL_HORAS`) ou quando o usuário apaga. O `id` tem 128 bits aleatórios; não há listagem de trabalhos.
+Os PDFs enviados são apagados pelo próprio processo de comparação antes de a comparação ser dada como
+concluída. O relatório e o estado ficam em `PDFDIFF_DATA_DIR/comparacoes/<id>/` e são removidos depois do prazo
+(`PDFDIFF_TTL_HORAS`) ou quando o usuário apaga. O `id` tem 128 bits aleatórios; não há listagem de comparações.
 Os logs registram id, tamanhos e tempos, nunca o conteúdo dos PDFs.
 
 ### Testes

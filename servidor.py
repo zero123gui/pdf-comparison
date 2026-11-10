@@ -54,12 +54,12 @@ CSP_PAGINA = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 
 
 log = logging.getLogger("pdfdiff")
 
-# Estado da fila, só neste processo (o estado de cada trabalho fica em arquivos: status.json)
+# Estado da fila, só neste processo (o estado de cada comparação fica em arquivos: status.json)
 _contexto = multiprocessing.get_context("spawn")
 _trava = threading.Lock()
 _semaforo = threading.BoundedSemaphore(MAX_SIMULTANEAS)
 _ativos = 0          # na fila + executando
-_processos = {}      # id do trabalho -> processo da comparação
+_processos = {}      # id da comparação -> processo que a executa
 
 
 class AppException(Exception):
@@ -71,25 +71,25 @@ class AppException(Exception):
 
 
 # ------------------------------------------------------------------ pastas e estado em arquivos
-def pasta_do(job_id):
-    """Pasta do trabalho; None se o id não tem o formato esperado (impede ../ e afins)."""
-    if not ID_VALIDO.fullmatch(job_id or ""):
+def pasta_do(id_comparacao):
+    """Pasta da comparação; None se o id não tem o formato esperado (impede ../ e afins)."""
+    if not ID_VALIDO.fullmatch(id_comparacao or ""):
         return None
-    return PASTA_DADOS / "jobs" / job_id
+    return PASTA_DADOS / "comparacoes" / id_comparacao
 
 
-def novo_trabalho():
-    """Cria a pasta de um trabalho novo (a vaga já deve estar reservada)."""
-    job_id = uuid.uuid4().hex
-    pasta = PASTA_DADOS / "jobs" / job_id
+def nova_comparacao():
+    """Cria a pasta de uma comparação nova (a vaga já deve estar reservada)."""
+    id_comparacao = uuid.uuid4().hex
+    pasta = PASTA_DADOS / "comparacoes" / id_comparacao
     pasta.mkdir()
-    return job_id, pasta
+    return id_comparacao, pasta
 
 
 def escreve_status(pasta, **campos):
     """Grava status.json de forma atômica, para ninguém ler um arquivo pela metade."""
     pasta = Path(pasta)
-    if not pasta.exists():  # o trabalho foi apagado enquanto rodava
+    if not pasta.exists():  # a comparação foi apagada enquanto rodava
         return
     caminho = pasta / "status.json"
     atual = {}
@@ -104,9 +104,9 @@ def escreve_status(pasta, **campos):
     os.replace(tmp, caminho)
 
 
-def estado(job_id):
+def estado(id_comparacao):
     """Conteúdo de status.json mais os nomes dos arquivos e a validade; {} se não existe."""
-    pasta = pasta_do(job_id)
+    pasta = pasta_do(id_comparacao)
     if pasta is None:
         return {}
     try:
@@ -124,7 +124,7 @@ def estado(job_id):
 
 
 def apaga_entradas(pasta):
-    """Os PDFs enviados não ficam guardados: saem antes de o trabalho ser dado como terminado."""
+    """Os PDFs enviados não ficam guardados: saem antes de a comparação ser dada como terminada."""
     for nome in ("base.pdf", "revisada.pdf"):
         (Path(pasta) / nome).unlink(missing_ok=True)
 
@@ -199,26 +199,26 @@ def libera_vaga():
         _ativos = max(0, _ativos - 1)
 
 
-def inicia_trabalho(job_id, meta):
-    """Registra o trabalho como 'na fila' e o entrega a uma thread que espera a vez de rodar."""
-    pasta = pasta_do(job_id)
+def inicia_comparacao(id_comparacao, meta):
+    """Registra a comparação como 'na fila' e o entrega a uma thread que espera a vez de rodar."""
+    pasta = pasta_do(id_comparacao)
     (pasta / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     escreve_status(pasta, status="na_fila", etapa="Na fila", progresso=0.0, criado_em=time.time())
-    threading.Thread(target=supervisiona, args=(job_id,), name="job-" + job_id[:6], daemon=True).start()
+    threading.Thread(target=supervisiona, args=(id_comparacao,), name="supervisor-" + id_comparacao[:6], daemon=True).start()
 
 
-def supervisiona(job_id):
+def supervisiona(id_comparacao):
     """Espera uma vaga, roda a comparação num processo próprio e vigia o tempo limite."""
-    pasta = pasta_do(job_id)
+    pasta = pasta_do(id_comparacao)
     try:
         with _semaforo:
             if not pasta.exists():  # apagado enquanto esperava na fila
                 return
             inicio = time.time()
             proc = _contexto.Process(target=executa_comparacao, args=(str(pasta), LEITORES),
-                                     name="comparacao-" + job_id[:6])
+                                     name="comparacao-" + id_comparacao[:6])
             proc.start()
-            _processos[job_id] = proc
+            _processos[id_comparacao] = proc
             try:
                 while proc.is_alive():
                     proc.join(0.5)
@@ -229,27 +229,27 @@ def supervisiona(job_id):
                             "Tente ignorar mais páginas ou usar arquivos menores." % (TEMPO_MAX_S // 60)))
                         break
             finally:
-                _processos.pop(job_id, None)
-            if pasta.exists() and estado(job_id).get("status") not in TERMINAIS:
+                _processos.pop(id_comparacao, None)
+            if pasta.exists() and estado(id_comparacao).get("status") not in TERMINAIS:
                 escreve_status(pasta, status="erro", etapa="Erro", erro=(
                     "O processamento terminou de forma inesperada (talvez faltou memória). "
                     "Tente novamente com arquivos menores."))
-            log.info("trabalho %s terminou: %s em %.1fs", job_id[:8], estado(job_id).get("status"),
+            log.info("comparação %s terminou: %s em %.1fs", id_comparacao[:8], estado(id_comparacao).get("status"),
                      time.time() - inicio)
     except Exception:
-        log.exception("falha ao supervisionar o trabalho %s", job_id[:8])
+        log.exception("falha ao supervisionar a comparação %s", id_comparacao[:8])
         escreve_status(pasta, status="erro", etapa="Erro", erro="Erro interno do servidor.")
     finally:
         apaga_entradas(pasta)  # garantia extra: nada do que foi enviado fica guardado
         libera_vaga()
 
 
-def remove_trabalho(job_id):
-    """Apaga o trabalho; se a comparação estiver rodando, ela é interrompida."""
-    pasta = pasta_do(job_id)
+def remove_comparacao(id_comparacao):
+    """Apaga a comparação; se estiver rodando, ela é interrompida."""
+    pasta = pasta_do(id_comparacao)
     if pasta is None or not pasta.exists():
         return False
-    proc = _processos.get(job_id)
+    proc = _processos.get(id_comparacao)
     if proc is not None and proc.is_alive():
         encerra(proc)
     shutil.rmtree(pasta, ignore_errors=True)
@@ -258,7 +258,7 @@ def remove_trabalho(job_id):
 
 def limpa_expirados():
     agora, removidos = time.time(), 0
-    for pasta in (PASTA_DADOS / "jobs").iterdir():
+    for pasta in (PASTA_DADOS / "comparacoes").iterdir():
         if not (pasta.is_dir() and ID_VALIDO.fullmatch(pasta.name)):
             continue
         try:
@@ -271,13 +271,13 @@ def limpa_expirados():
             shutil.rmtree(pasta, ignore_errors=True)
             removidos += 1
     if removidos:
-        log.info("removidos %d trabalhos expirados", removidos)
+        log.info("removidas %d comparações expiradas", removidos)
     return removidos
 
 
 def recupera():
-    """Ao iniciar: os trabalhos que estavam rodando morreram junto com o servidor anterior."""
-    for pasta in (PASTA_DADOS / "jobs").iterdir():
+    """Ao iniciar: as comparações que estavam rodando morreram junto com o servidor anterior."""
+    for pasta in (PASTA_DADOS / "comparacoes").iterdir():
         if pasta.is_dir() and ID_VALIDO.fullmatch(pasta.name):
             if estado(pasta.name).get("status") in ("na_fila", "executando"):
                 escreve_status(pasta, status="erro", etapa="Erro", erro=(
@@ -287,12 +287,12 @@ def recupera():
 
 def inicia(limpeza_periodica=False):
     """Prepara o servidor. Só o processo principal faz isto: um processo de comparação (filho,
-    iniciado com spawn) que importe este arquivo não pode mexer nas pastas dos trabalhos."""
+    iniciado com spawn) que importe este arquivo não pode mexer nas pastas das comparações."""
     global _semaforo, _ativos
     if multiprocessing.parent_process() is not None:
         return
     app.config["MAX_CONTENT_LENGTH"] = 2 * TAMANHO_MAX_MB * MB + MB
-    (PASTA_DADOS / "jobs").mkdir(parents=True, exist_ok=True)
+    (PASTA_DADOS / "comparacoes").mkdir(parents=True, exist_ok=True)
     _semaforo = threading.BoundedSemaphore(MAX_SIMULTANEAS)
     _ativos = 0
     recupera()
@@ -304,7 +304,7 @@ def inicia(limpeza_periodica=False):
                 try:
                     limpa_expirados()
                 except Exception:
-                    log.exception("falha na limpeza de trabalhos expirados")
+                    log.exception("falha na limpeza de comparações expiradas")
         threading.Thread(target=ciclo, name="limpeza", daemon=True).start()
 
 
@@ -346,19 +346,23 @@ def arquivo_grande(_):
     return erro("Os arquivos passam do tamanho permitido (%d MB por PDF)." % TAMANHO_MAX_MB, 413)
 
 
+# Página inicial: o formulário para enviar os dois PDFs, a tela de andamento e o relatório
 @app.route("/")
-def pagina():
+def pagina_inicial():
     return render_template("index.html", max_mb=TAMANHO_MAX_MB, ignorar=IGNORAR_PAGINAS_PADRAO,
                            ttl_horas=VALIDADE_S // 3600)
 
 
+# Verificação de saúde: responde "ok" quando o servidor está no ar (para monitoramento)
 @app.route("/saude")
 def saude():
     return Response("ok", mimetype="text/plain")
 
 
-@app.route("/api/jobs", methods=["POST"])
-def cria_trabalho():
+# Inicia uma comparação: recebe os PDFs "base" e "revisada" (e as opções) por POST, confere os
+# arquivos e responde 202 com o id da comparação, que continua rodando em segundo plano
+@app.route("/api/comparacoes", methods=["POST"])
+def cria_comparacao():
     base, revisada = request.files.get("base"), request.files.get("revisada")
     if not base or not revisada or not base.filename or not revisada.filename:
         raise AppException("Envie os dois PDFs: a versão base e a versão revisada.")
@@ -371,7 +375,7 @@ def cria_trabalho():
     somente = request.form.get("somente_marcados", "").lower() in ("1", "true", "on", "sim")
 
     reserva_vaga()
-    job_id, pasta = novo_trabalho()
+    id_comparacao, pasta = nova_comparacao()
     try:
         for campo, arquivo in (("base", base), ("revisada", revisada)):
             destino = pasta / (campo + ".pdf")
@@ -380,38 +384,41 @@ def cria_trabalho():
                 raise AppException("O PDF «%s» passa de %d MB." % (nome_para_exibir(arquivo), TAMANHO_MAX_MB), 413)
             if not eh_pdf(destino):
                 raise AppException("O arquivo «%s» não é um PDF." % nome_para_exibir(arquivo))
-        inicia_trabalho(job_id, {
+        inicia_comparacao(id_comparacao, {
             "nome_base": nome_para_exibir(base), "nome_revisada": nome_para_exibir(revisada),
             "opcoes": {"ignorar_paginas": ignorar, "somente_marcados": somente}})
     except Exception:  # envio recusado ou falha inesperada: nada fica no servidor
         libera_vaga()
-        remove_trabalho(job_id)
+        remove_comparacao(id_comparacao)
         raise
-    resposta = jsonify({"id": job_id, "status_url": "/api/jobs/" + job_id,
-                        "relatorio_url": "/jobs/%s/relatorio" % job_id})
+    resposta = jsonify({"id": id_comparacao, "status_url": "/api/comparacoes/%s/andamento" % id_comparacao,
+                        "relatorio_url": "/comparacoes/%s/relatorio" % id_comparacao})
     resposta.status_code = 202
     return resposta
 
 
-@app.route("/api/jobs/<job_id>", methods=["GET"])
-def consulta(job_id):
-    status = estado(job_id)
+# Andamento de uma comparação: devolve o status (na_fila, executando, concluido ou erro), a etapa
+# atual e o progresso; a página consulta este endpoint a cada 1,5 segundo
+@app.route("/api/comparacoes/<id_comparacao>/andamento", methods=["GET"])
+def consulta_andamento(id_comparacao):
+    status = estado(id_comparacao)
     if not status:
-        raise AppException("Este trabalho não existe mais: ele expirou ou foi apagado.", 404)
-    status["id"] = job_id
+        raise AppException("Esta comparação não existe mais: ela expirou ou foi apagada.", 404)
+    status["id"] = id_comparacao
     resposta = jsonify(status)
     resposta.headers["Cache-Control"] = "no-store"
     return resposta
 
 
-@app.route("/jobs/<job_id>/relatorio")
-def relatorio(job_id):
-    status = estado(job_id)
+# Relatório da comparação concluída, em HTML (com ?baixar=1 vem como arquivo para download)
+@app.route("/comparacoes/<id_comparacao>/relatorio")
+def mostra_relatorio(id_comparacao):
+    status = estado(id_comparacao)
     if not status:
         raise AppException("Este relatório não existe mais: ele expirou ou foi apagado.", 404)
     if status.get("status") != "concluido":
         raise AppException("O relatório ainda não está pronto.", 409)
-    resposta = send_file(pasta_do(job_id) / "relatorio.html", mimetype="text/html", conditional=False,
+    resposta = send_file(pasta_do(id_comparacao) / "relatorio.html", mimetype="text/html", conditional=False,
                          as_attachment=request.args.get("baixar") == "1",
                          download_name="relatorio-comparacao.html")
     resposta.headers["Content-Security-Policy"] = CSP_RELATORIO
@@ -419,10 +426,11 @@ def relatorio(job_id):
     return resposta
 
 
-@app.route("/api/jobs/<job_id>", methods=["DELETE"])
-def apaga(job_id):
-    if not remove_trabalho(job_id):
-        raise AppException("Este trabalho não existe mais.", 404)
+# Apaga a comparação e os arquivos dela agora; se ainda estiver rodando, ela é cancelada
+@app.route("/api/comparacoes/<id_comparacao>", methods=["DELETE"])
+def apaga_comparacao(id_comparacao):
+    if not remove_comparacao(id_comparacao):
+        raise AppException("Esta comparação não existe mais.", 404)
     return "", 204
 
 

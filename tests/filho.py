@@ -8,7 +8,7 @@ def cria_app_no_filho(pasta_dados):
     servidor.inicia()
 
 
-def trabalho_lento(pasta, leitores):
+def comparacao_lenta(pasta, leitores):
     """Comparação de mentira: cria um neto (como o leitor de páginas) e fica esperando."""
     import subprocess
     import time

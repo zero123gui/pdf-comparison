@@ -29,18 +29,18 @@ class TestPdfsReais(unittest.TestCase):
                 servidor.inicia()
                 cliente = servidor.app.test_client()
                 with open(ITAB, "rb") as b, open(ITAC, "rb") as r:
-                    resposta = cliente.post("/api/jobs", content_type="multipart/form-data", data={
+                    resposta = cliente.post("/api/comparacoes", content_type="multipart/form-data", data={
                         "base": (b, "ITAB.pdf"), "revisada": (r, "ITAC.pdf"), "ignorar_paginas": "1"})
-                job_id = resposta.get_json()["id"]
+                id_comparacao = resposta.get_json()["id"]
                 fim = time.time() + 180
                 while time.time() < fim:
-                    estado = cliente.get("/api/jobs/" + job_id).get_json()
+                    estado = cliente.get("/api/comparacoes/%s/andamento" % id_comparacao).get_json()
                     if estado["status"] in ("concluido", "erro"):
                         break
                     time.sleep(1)
                 self.assertEqual(estado["status"], "concluido", estado)
                 self.assertEqual((estado["totais"]["itens"], estado["totais"]["marcados"]), (26, 24))
-                self.assertEqual(cliente.get("/jobs/%s/relatorio" % job_id).data, cli.read_bytes())
+                self.assertEqual(cliente.get("/comparacoes/%s/relatorio" % id_comparacao).data, cli.read_bytes())
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
   const maxMb = Number(document.body.dataset.maxMb);
   const telas = { envio: $("#tela-envio"), andamento: $("#tela-andamento"), relatorio: $("#tela-relatorio") };
   const arquivos = { base: null, revisada: null };
-  let trabalho = null;     // id do trabalho em andamento
+  let idComparacao = null;  // id da comparação em andamento
   let temporizador = null;
   let falhasSeguidas = 0;
 
@@ -80,7 +80,7 @@
     $("#etapa").textContent = "Enviando os arquivos…";
     $("#barra").value = 0;
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/jobs");
+    xhr.open("POST", "/api/comparacoes");
     xhr.upload.onprogress = (ev) => {
       if (ev.lengthComputable) {
         const pct = Math.round((ev.loaded / ev.total) * 100);
@@ -103,7 +103,7 @@
 
   function volta(mensagem, informativo) {
     clearTimeout(temporizador);
-    trabalho = null;
+    idComparacao = null;
     history.replaceState(null, "", location.pathname);
     mostra("envio");
     aviso(mensagem, informativo);
@@ -111,21 +111,21 @@
 
   // ------------------------------------------------------------------------------ andamento
   function acompanha(id) {
-    trabalho = id;
+    idComparacao = id;
     falhasSeguidas = 0;
-    history.replaceState(null, "", "?job=" + id);
+    history.replaceState(null, "", "?comparacao=" + id);
     mostra("andamento");
     consulta();
   }
 
   async function consulta() {
-    const id = trabalho;
+    const id = idComparacao;
     if (!id) return;
     try {
-      const resposta = await fetch("/api/jobs/" + id, { cache: "no-store" });
-      if (id !== trabalho) return;
+      const resposta = await fetch("/api/comparacoes/" + id + "/andamento", { cache: "no-store" });
+      if (id !== idComparacao) return;
       const corpo = await resposta.json().catch(() => ({}));
-      if (resposta.status === 404) return volta(corpo.erro || "Este trabalho não existe mais.");
+      if (resposta.status === 404) return volta(corpo.erro || "Esta comparação não existe mais.");
       falhasSeguidas = 0;
       if (corpo.status === "concluido") return mostraRelatorio(corpo);
       if (corpo.status === "erro") return volta(corpo.erro || "A comparação falhou.");
@@ -140,9 +140,9 @@
   }
 
   $("#btn-cancelar").addEventListener("click", async () => {
-    const id = trabalho;
+    const id = idComparacao;
     clearTimeout(temporizador);
-    if (id) await fetch("/api/jobs/" + id, { method: "DELETE" }).catch(() => {});
+    if (id) await fetch("/api/comparacoes/" + id, { method: "DELETE" }).catch(() => {});
     volta("");
   });
 
@@ -160,7 +160,7 @@
     if (estado.expira_em) {
       $("#validade").textContent = "Disponível até " + new Date(estado.expira_em * 1000).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) + ".";
     }
-    const url = "/jobs/" + trabalho + "/relatorio";
+    const url = "/comparacoes/" + idComparacao + "/relatorio";
     $("#quadro").src = url;
     $("#lnk-aba").href = url;
     $("#lnk-baixar").href = url + "?baixar=1";
@@ -173,13 +173,13 @@
     volta("");
   });
   $("#btn-apagar").addEventListener("click", async () => {
-    if (!trabalho || !confirm("Apagar este relatório do servidor agora? O link deixa de funcionar.")) return;
-    await fetch("/api/jobs/" + trabalho, { method: "DELETE" }).catch(() => {});
+    if (!idComparacao || !confirm("Apagar este relatório do servidor agora? O link deixa de funcionar.")) return;
+    await fetch("/api/comparacoes/" + idComparacao, { method: "DELETE" }).catch(() => {});
     $("#quadro").removeAttribute("src");
     volta("O relatório foi apagado do servidor.", true);
   });
 
-  // quem abre ou atualiza a página com ?job=<id> volta ao trabalho
-  const id = new URLSearchParams(location.search).get("job");
+  // quem abre ou atualiza a página com ?comparacao=<id> volta à comparação
+  const id = new URLSearchParams(location.search).get("comparacao");
   if (id && /^[0-9a-f]{32}$/.test(id)) acompanha(id);
 })();
