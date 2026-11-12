@@ -3,7 +3,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-import pdf_diff
+from pdfdiff.relatorio import gera_html
+from pdfdiff.relatorio_assets import CSS
 
 
 def _item(tipo, pag_b, pag_r):
@@ -17,7 +18,7 @@ class TestLinkParaOsPdfs(unittest.TestCase):
     def setUp(self):
         itens = [_item("adicionado", None, 5), _item("removido", 3, None), _item("modificado", 4, 7)]
         info = {"n_b": 10, "n_r": 10, "removidas": set(), "num_so_base": [], "num_so_rev": []}
-        self.html = pdf_diff.gera_html(SimpleNamespace(base="a.pdf", revisada="b.pdf"), itens, [], info)
+        self.html = gera_html(SimpleNamespace(base="a.pdf", revisada="b.pdf"), itens, [], info)
         self.cards = re.findall(r"<section class='item'([^>]*)>(.*?)</section>", self.html)
 
     def test_cada_card_leva_so_as_paginas_que_existem(self):
@@ -73,7 +74,7 @@ class TestRelatorioNovo(unittest.TestCase):
         itens[1]["frac"] = None
         itens.append(dict(_item("modificado", 8, 8), frac=0.2))  # cor parcial
         self.info = {"n_b": 10, "n_r": 10, "removidas": {"pagina 0 de 0"}, "num_so_base": ["8.4.1"], "num_so_rev": []}
-        self.html = pdf_diff.gera_html(SimpleNamespace(base="a.pdf", revisada="b.pdf"), itens, [], self.info)
+        self.html = gera_html(SimpleNamespace(base="a.pdf", revisada="b.pdf"), itens, [], self.info)
 
     def test_nada_vem_de_fora(self):
         # o script e o estilo são inline; fora deles, nenhum atributo carrega arquivo, imagem ou ícone por endereço
@@ -99,7 +100,7 @@ class TestRelatorioNovo(unittest.TestCase):
         self.assertIn("<p class='vazio' id='vazio' hidden>Nenhum item com estes filtros.", self.html)
 
     def test_sem_diferencas_diz_que_o_texto_e_o_mesmo(self):
-        html = pdf_diff.gera_html(SimpleNamespace(base="a.pdf", revisada="b.pdf"), [], [], self.info)
+        html = gera_html(SimpleNamespace(base="a.pdf", revisada="b.pdf"), [], [], self.info)
         self.assertIn("<h1>Nenhuma diferença entre as duas versões</h1>", html)
         self.assertIn("O texto das duas versões é o mesmo.", html)
 
@@ -111,7 +112,7 @@ class TestRelatorioNovo(unittest.TestCase):
     def test_movimento_so_com_a_preferencia_por_movimento(self):
         """Animação e transição ficam dentro de @media (prefers-reduced-motion: no-preference), na página e no relatório."""
         pagina = (Path(__file__).resolve().parent.parent / "static" / "style.css").read_text(encoding="utf-8")
-        for nome, css in (("style.css", pagina), ("relatório", pdf_diff.CSS)):
+        for nome, css in (("style.css", pagina), ("relatório", CSS)):
             with self.subTest(css=nome):
                 self.assertRegex(css, r"(animation|transition)\s*:")  # o teste não pode passar à toa
                 fora = _sem_bloco_media(css, "prefers-reduced-motion:no-preference" if nome == "relatório"
@@ -122,7 +123,7 @@ class TestRelatorioNovo(unittest.TestCase):
         """Dois arquivos de CSS (a página usa style.css, o relatório é autônomo): as cores não podem divergir."""
         pagina = Path(__file__).resolve().parent.parent / "static" / "style.css"
         pagina_claro, pagina_escuro = _tokens_de_cor(pagina.read_text(encoding="utf-8"))
-        relatorio_claro, relatorio_escuro = _tokens_de_cor(pdf_diff.CSS)
+        relatorio_claro, relatorio_escuro = _tokens_de_cor(CSS)
         self.assertTrue(relatorio_claro and relatorio_escuro)
         for nome, valor in relatorio_claro.items():
             self.assertEqual(pagina_claro.get(nome), valor, "claro " + nome)

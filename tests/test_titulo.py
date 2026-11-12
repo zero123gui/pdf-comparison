@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import pdf_diff
+from pdfdiff import comparar_pdfs
 from tests.pdfs import pdf_paginas
 
 # Cabeçalho típico de documento do Word: código, título (em duas linhas) e número da página, em células
@@ -23,7 +23,7 @@ class TestTituloDoDocumento(unittest.TestCase):
                 (Path(tmp) / nome).write_bytes(conteudo)
                 caminhos.append(str(Path(tmp) / nome))
             opcoes.setdefault("workers", 1)
-            return pdf_diff.comparar_pdfs(*caminhos, nome_base="ITAB.pdf", nome_revisada="ITAC.pdf", **opcoes)
+            return comparar_pdfs(*caminhos, nome_base="ITAB.pdf", nome_revisada="ITAC.pdf", **opcoes)
 
     def test_titulo_vem_do_cabecalho_sem_codigo_nem_numero_da_pagina(self):
         pdf = pdf_paginas(6, CABECALHO)
