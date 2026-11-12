@@ -10,10 +10,12 @@
 
   function mostra(nome) {
     Object.entries(telas).forEach(([k, el]) => { el.hidden = k !== nome; });
+    // quem usa leitor de tela ouve o título da tela nova
+    if (nome !== "envio") telas[nome].querySelector("h1").focus({ preventScroll: true });
   }
   function aviso(texto, informativo) {
     const el = $("#aviso");
-    el.textContent = texto || "";
+    $("#aviso-texto").textContent = texto || "";
     el.hidden = !texto;
     el.classList.toggle("info", Boolean(informativo));
     el.setAttribute("role", informativo ? "status" : "alert");
@@ -21,8 +23,25 @@
   function tamanho(bytes) {
     return bytes >= 1048576 ? (bytes / 1048576).toFixed(1).replace(".", ",") + " MB" : Math.max(1, Math.round(bytes / 1024)) + " KB";
   }
+  function plural(n, singular, varios) {
+    return n + " " + (n === 1 ? singular : varios);
+  }
+  // botão com indicador de carregamento (aria-busy); o clique é ignorado enquanto ele estiver ocupado
+  function ocupado(botao, sim) {
+    if (sim) botao.setAttribute("aria-busy", "true"); else botao.removeAttribute("aria-busy");
+  }
+  const ocupadoAgora = (botao) => botao.getAttribute("aria-busy") === "true";
 
   // ------------------------------------------------------------------ escolha dos arquivos
+  function atualizaDica() {
+    let texto = "";
+    if (!arquivos.base && !arquivos.revisada) texto = "Escolha a versão base e a versão revisada.";
+    else if (!arquivos.base) texto = "Falta a versão base.";
+    else if (!arquivos.revisada) texto = "Falta a versão revisada.";
+    $("#dica-comparar").textContent = texto;
+    $("#dica-comparar").hidden = !texto;
+  }
+
   function escolhe(campo, arquivo) {
     const zona = $("#zona-" + campo);
     const estado = zona.querySelector(".zona-estado");
@@ -41,12 +60,13 @@
         nome.textContent = arquivo.name;
         const peso = document.createElement("span");
         peso.className = "tamanho";
-        peso.textContent = " (" + tamanho(arquivo.size) + ")";
+        peso.textContent = tamanho(arquivo.size);
         estado.append(nome, peso);
         zona.classList.add("cheia");
       }
     }
     $("#btn-comparar").disabled = !(arquivos.base && arquivos.revisada);
+    atualizaDica();
   }
 
   ["base", "revisada"].forEach((campo) => {
@@ -66,6 +86,23 @@
   });
 
   // ---------------------------------------------------------------------------------- envio
+  function andamento(etapa, progresso) {
+    $("#etapa").textContent = etapa;
+    const barra = $("#barra");
+    if (progresso === null) {  // sem número ainda (na fila): a barra fica em movimento, sem valor
+      barra.removeAttribute("value");
+      $("#pct").textContent = "";
+    } else {
+      barra.value = progresso;
+      $("#pct").textContent = progresso + "%";
+    }
+  }
+  function titulo(nomes) {
+    $("#titulo-andamento").textContent = nomes && nomes.base && nomes.revisada
+      ? "Comparando «" + nomes.base + "» com «" + nomes.revisada + "»"
+      : "Comparando os documentos";
+  }
+
   $("#formulario").addEventListener("submit", (e) => {
     e.preventDefault();
     if (!(arquivos.base && arquivos.revisada)) return;
@@ -76,17 +113,13 @@
     dados.append("ignorar_paginas", $("#ignorar").value || "0");
     if ($("#somente").checked) dados.append("somente_marcados", "1");
 
+    titulo({ base: arquivos.base.name, revisada: arquivos.revisada.name });
     mostra("andamento");
-    $("#etapa").textContent = "Enviando os arquivos…";
-    $("#barra").value = 0;
+    andamento("Enviando os arquivos…", 0);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/comparacoes");
     xhr.upload.onprogress = (ev) => {
-      if (ev.lengthComputable) {
-        const pct = Math.round((ev.loaded / ev.total) * 100);
-        $("#barra").value = pct;
-        $("#etapa").textContent = "Enviando os arquivos… " + pct + "%";
-      }
+      if (ev.lengthComputable) andamento("Enviando os arquivos…", Math.round((ev.loaded / ev.total) * 100));
     };
     xhr.onload = () => {
       let corpo = {};
@@ -129,8 +162,9 @@
       falhasSeguidas = 0;
       if (corpo.status === "concluido") return mostraRelatorio(corpo);
       if (corpo.status === "erro") return volta(corpo.erro || "A comparação falhou.");
-      $("#etapa").textContent = corpo.etapa || "Comparando…";
-      $("#barra").value = Math.round((corpo.progresso || 0) * 100);
+      titulo(corpo.nomes);
+      if (corpo.status === "na_fila") andamento("Na fila, esperando uma vaga…", null);
+      else andamento(corpo.etapa || "Comparando…", Math.round((corpo.progresso || 0) * 100));
     } catch (_) {
       falhasSeguidas += 1;
       if (falhasSeguidas >= 5) return volta("Perdi a conexão com o servidor. Abra o mesmo endereço mais tarde para ver o resultado.");
@@ -140,9 +174,13 @@
   }
 
   $("#btn-cancelar").addEventListener("click", async () => {
+    const botao = $("#btn-cancelar");
+    if (ocupadoAgora(botao)) return;
     const id = idComparacao;
     clearTimeout(temporizador);
+    ocupado(botao, true);
     if (id) await fetch("/api/comparacoes/" + id, { method: "DELETE" }).catch(() => {});
+    ocupado(botao, false);
     volta("");
   });
 
@@ -151,10 +189,17 @@
     clearTimeout(temporizador);
     const t = estado.totais || {};
     const nomes = estado.nomes || {};
+    const itens = t.itens || 0;
+    // o título do documento vem de dentro dos PDFs (cabeçalho das páginas); o nome do arquivo é outro
+    $("#doc-titulo").textContent = t.titulo || "";
+    $("#doc-titulo").hidden = !t.titulo;
+    $("#titulo-relatorio").textContent = itens
+      ? plural(itens, "diferença", "diferenças") + " entre as duas versões"
+      : "Nenhuma diferença entre as duas versões";
+    // o número de diferenças já está no título; o resumo traz o resto
     const partes = [];
     if (nomes.base && nomes.revisada) partes.push(nomes.base + " → " + nomes.revisada);
-    partes.push((t.itens || 0) + " diferenças");
-    partes.push((t.marcados || 0) + " marcadas em cor");
+    if (itens) partes.push((t.marcados || 0) + " marcadas em cor");
     if (t.paginas_base) partes.push(t.paginas_base + " → " + t.paginas_revisada + " páginas");
     $("#resumo").textContent = partes.join(" · ");
     if (estado.expira_em) {
@@ -173,8 +218,11 @@
     volta("");
   });
   $("#btn-apagar").addEventListener("click", async () => {
-    if (!idComparacao || !confirm("Apagar este relatório do servidor agora? O link deixa de funcionar.")) return;
+    const botao = $("#btn-apagar");
+    if (ocupadoAgora(botao) || !idComparacao || !confirm("Apagar este relatório do servidor agora? O link deixa de funcionar.")) return;
+    ocupado(botao, true);
     await fetch("/api/comparacoes/" + idComparacao, { method: "DELETE" }).catch(() => {});
+    ocupado(botao, false);
     $("#quadro").removeAttribute("src");
     volta("O relatório foi apagado do servidor.", true);
   });

@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>Comparador de PDFs</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -10,77 +11,148 @@
 <body data-max-mb="{{ max_mb }}" data-ttl-horas="{{ ttl_horas }}">
   <header class="topo">
     <div class="miolo">
-      <h1>Comparador de PDFs</h1>
-      <p>Envie a versão base e a versão revisada de um documento e veja só o que mudou.</p>
+      <p class="marca">
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H5.5A1.5 1.5 0 0 0 4 5.5v13A1.5 1.5 0 0 0 5.5 20H8"/><path d="M16 4h2.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H16"/><path d="M12 3v18"/></svg>
+        Comparador de PDFs
+      </p>
     </div>
   </header>
 
   <main class="miolo">
-    <div id="aviso" class="aviso" role="alert" hidden></div>
+    <div id="aviso" class="aviso" role="alert" hidden>
+      <svg class="ic ic-erro" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5"/><path d="M12 16.5h.01"/></svg>
+      <svg class="ic ic-info" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.5h.01"/></svg>
+      <span id="aviso-texto" class="aviso-texto"></span>
+    </div>
 
     <section id="tela-envio" aria-labelledby="titulo-envio">
-      <h2 id="titulo-envio" class="so-leitor">Enviar os documentos</h2>
+      <div class="intro">
+        <h1 id="titulo-envio">Veja só o que mudou entre duas versões de um PDF</h1>
+        <p>Envie a versão base e a revisada. O relatório lista cada diferença com a página em que ela está nos dois PDFs.</p>
+      </div>
+
       <form id="formulario" novalidate>
         <div class="arquivos">
           <label class="zona" id="zona-base" for="arq-base">
-            <span class="zona-rotulo">Versão base</span>
-            <span class="zona-dica">A versão anterior do documento</span>
+            <span class="zona-icone">
+              <svg class="ic ic-vazio" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+              <svg class="ic ic-cheio" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9 14.5 2 2 4-4.5"/></svg>
+            </span>
+            <span class="zona-texto">
+              <span class="zona-rotulo">Versão base</span>
+              <span class="zona-dica">O documento anterior, sem as alterações</span>
+            </span>
             <span class="zona-estado" data-vazio="Arraste o PDF aqui ou clique para escolher"></span>
             <input class="so-leitor" type="file" id="arq-base" name="base" accept="application/pdf,.pdf">
           </label>
           <label class="zona" id="zona-revisada" for="arq-revisada">
-            <span class="zona-rotulo">Versão revisada</span>
-            <span class="zona-dica">A versão nova, com as alterações</span>
+            <span class="zona-icone">
+              <svg class="ic ic-vazio" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+              <svg class="ic ic-cheio" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9 14.5 2 2 4-4.5"/></svg>
+            </span>
+            <span class="zona-texto">
+              <span class="zona-rotulo">Versão revisada</span>
+              <span class="zona-dica">O documento novo, com as alterações</span>
+            </span>
             <span class="zona-estado" data-vazio="Arraste o PDF aqui ou clique para escolher"></span>
             <input class="so-leitor" type="file" id="arq-revisada" name="revisada" accept="application/pdf,.pdf">
           </label>
         </div>
 
         <fieldset class="opcoes">
-          <legend>Opções</legend>
+          <legend class="so-leitor">Opções</legend>
           <div class="campo">
             <label for="ignorar">Páginas iniciais a ignorar</label>
             <input type="number" id="ignorar" name="ignorar_paginas" min="0" max="50" value="{{ ignorar }}">
             <small>Descarta as primeiras páginas de cada PDF, como a capa. Use 0 para comparar tudo.</small>
           </div>
-          <div class="campo">
-            <label class="marca"><input type="checkbox" id="somente" name="somente_marcados"> Mostrar só o que está marcado em cor</label>
+          <div class="campo campo-chave">
+            <label class="interruptor" for="somente">
+              <input type="checkbox" role="switch" id="somente" name="somente_marcados">
+              Mostrar só o que está marcado em cor
+            </label>
             <small>Esconde as diferenças que não estão coloridas na versão revisada.</small>
           </div>
         </fieldset>
 
-        <div class="rodape-form">
-          <button type="submit" id="btn-comparar" class="primario" disabled>Comparar</button>
-          <p class="nota">Os PDFs ficam no servidor, junto com o relatório, por {{ ttl_horas }} horas, para quem tiver
-            o link (é assim que o relatório abre os PDFs); depois disso são apagados. Limite de {{ max_mb }} MB por arquivo.</p>
+        <div class="enviar">
+          <button type="submit" id="btn-comparar" class="btn btn-primario btn-grande" disabled>
+            Comparar
+            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+          </button>
+          <p id="dica-comparar" class="dica" aria-live="polite">Escolha a versão base e a versão revisada.</p>
         </div>
+        <p class="nota">Os PDFs ficam no servidor, junto com o relatório, por {{ ttl_horas }} horas, para quem tiver
+          o link (é assim que o relatório abre os PDFs); depois disso são apagados. Limite de {{ max_mb }} MB por arquivo.</p>
       </form>
+
+      <aside class="exemplo" aria-labelledby="titulo-exemplo">
+        <h2 id="titulo-exemplo">Assim aparece cada diferença no relatório</h2>
+        <article class="item">
+          <header>
+            <span class="n">#1</span>
+            <span class="tipo t-modificado">
+              <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L16 5a2.1 2.1 0 0 1 3 3L8 19z"/><path d="m14 7 3 3"/></svg>
+              Modificado
+            </span>
+            <span class="pags">Base p. 4 · Revisada p. 4</span>
+          </header>
+          <p>… antes de qualquer intervenção, se o equipamento está em modo <del>manual</del> <ins>automático supervisionado</ins> e se a tensão de alimentação permanece dentro da faixa …</p>
+        </article>
+      </aside>
     </section>
 
     <section id="tela-andamento" aria-labelledby="titulo-andamento" hidden>
-      <h2 id="titulo-andamento">Comparando os documentos</h2>
-      <p id="etapa" class="etapa" aria-live="polite">Enviando os arquivos…</p>
-      <progress id="barra" max="100" value="0" aria-label="Andamento da comparação"></progress>
-      <p class="nota">Costuma levar de 20 segundos a alguns minutos. Você pode atualizar a página ou fechar e voltar
-        pelo mesmo endereço: a comparação continua no servidor.</p>
-      <button type="button" id="btn-cancelar" class="secundario">Cancelar</button>
+      <div class="andamento">
+        <h1 id="titulo-andamento" tabindex="-1">Comparando os documentos</h1>
+        <div class="progresso">
+          <span id="etapa" aria-live="polite">Enviando os arquivos…</span>
+          <span id="pct" class="num"></span>
+          <progress id="barra" max="100" value="0" aria-labelledby="etapa"></progress>
+        </div>
+        <p class="nota">Costuma levar de 20 segundos a alguns minutos. Você pode atualizar a página ou fechar e voltar
+          pelo mesmo endereço: a comparação continua no servidor.</p>
+        <button type="button" id="btn-cancelar" class="btn btn-quieto">
+          <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          Cancelar
+        </button>
+      </div>
+      <div class="esqueleto" aria-hidden="true">
+        <div class="item"><header><span class="esqueleto-linha curta"></span></header><p><span class="esqueleto-linha"></span><span class="esqueleto-linha media"></span></p></div>
+        <div class="item"><header><span class="esqueleto-linha curta"></span></header><p><span class="esqueleto-linha"></span><span class="esqueleto-linha media"></span></p></div>
+      </div>
     </section>
 
     <section id="tela-relatorio" aria-labelledby="titulo-relatorio" hidden>
-      <div class="cabeca-relatorio">
-        <div>
-          <h2 id="titulo-relatorio">Resultado</h2>
+      <div class="resultado-topo">
+        <div class="resultado-titulo">
+          <p id="doc-titulo" class="doc-titulo" hidden></p>
+          <h1 id="titulo-relatorio" tabindex="-1">Resultado da comparação</h1>
           <p id="resumo" class="resumo"></p>
           <p id="validade" class="nota"></p>
         </div>
         <div class="acoes">
-          <a id="lnk-aba" class="botao" target="_blank" rel="noopener">Abrir em nova aba</a>
-          <a id="lnk-baixar" class="botao">Baixar HTML</a>
-          <button type="button" id="btn-nova" class="primario">Nova comparação</button>
-          <button type="button" id="btn-apagar" class="secundario">Apagar agora</button>
+          <a id="lnk-baixar" class="btn btn-primario">
+            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11"/><path d="m7 11 5 5 5-5"/><path d="M5 20h14"/></svg>
+            Baixar HTML
+          </a>
+          <a id="lnk-aba" class="btn" target="_blank" rel="noopener">
+            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>
+            Abrir em nova aba
+          </a>
+          <button type="button" id="btn-nova" class="btn btn-quieto">
+            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            Nova comparação
+          </button>
+          <button type="button" id="btn-apagar" class="btn btn-quieto btn-perigo">
+            <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v5M14 11v5"/></svg>
+            Apagar agora
+          </button>
         </div>
       </div>
-      <iframe id="quadro" title="Relatório de comparação" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"></iframe>
+      <div class="quadro">
+        <iframe id="quadro" title="Relatório de comparação" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"></iframe>
+      </div>
     </section>
   </main>
 

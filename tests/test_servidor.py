@@ -11,7 +11,18 @@ from unittest import mock
 
 import servidor
 from tests import filho
-from tests.pdfs import BASE, REVISADA, pdf_simples
+from tests.pdfs import BASE, REVISADA, pdf_paginas, pdf_simples
+
+
+def confere_csp_da_pagina(teste, corpo):
+    """A CSP das páginas do sistema (style-src 'self', script-src 'self') bloqueia estilo e script inline
+    e carga de fora: o HTML não pode depender de nenhum dos dois."""
+    teste.assertNotRegex(corpo, r"\sstyle\s*=")                 # atributo style=
+    teste.assertNotIn("<style", corpo)
+    teste.assertNotRegex(corpo, r"<script(?![^>]*\ssrc=)")      # só <script src=...>
+    teste.assertNotRegex(corpo, r"(?:src|href)=[\"'](?:https?:)?//")
+    teste.assertNotRegex(corpo, r"\son[a-z]+\s*=")              # onclick= e afins
+    teste.assertNotIn("<use", corpo)
 
 
 class Base(unittest.TestCase):
@@ -63,6 +74,9 @@ class TestPaginasEEnvio(Base):
         self.assertIn("Comparador de PDFs".encode(), pagina.data)
         self.assertIn("default-src 'self'", pagina.headers["Content-Security-Policy"])
         self.assertEqual(self.cliente.get("/saude").data, b"ok")
+
+    def test_pagina_inicial_nao_usa_estilo_nem_script_inline(self):
+        confere_csp_da_pagina(self, self.cliente.get("/").get_data(as_text=True))
 
     def test_envio_incompleto(self):
         for dados in ({}, {"revisada": (io.BytesIO(pdf_simples(REVISADA)), "r.pdf")}):
@@ -128,6 +142,8 @@ class TestComparacao(Base):
         self.assertEqual(estado["totais"]["modificado"], 1)
         self.assertGreaterEqual(estado["totais"]["marcados"], 1)
         self.assertEqual(estado["nomes"], {"base": "base.pdf", "revisada": "revisada.pdf"})
+        self.assertEqual(estado["totais"]["titulos"], {"base": None, "revisada": None})  # PDFs sem cabeçalho
+        self.assertIsNone(estado["totais"]["titulo"])
 
         # buffered=True fecha o arquivo servido; no Windows um arquivo aberto não pode ser apagado
         rel = self.cliente.get("/comparacoes/%s/relatorio" % id_comparacao, buffered=True)
@@ -146,6 +162,18 @@ class TestComparacao(Base):
         self.assertFalse(pasta.exists())
         self.assertEqual(self.cliente.get("/api/comparacoes/%s/andamento" % id_comparacao).status_code, 404)
         self.assertEqual(self.cliente.get("/comparacoes/%s/relatorio" % id_comparacao).status_code, 404)
+
+    def test_titulo_do_documento_chega_ao_andamento_e_ao_relatorio(self):
+        """O título está dentro do PDF (cabeçalho das páginas); o nome do arquivo é outro."""
+        titulo = "Manual de Operacao do Sistema"
+        pdf = pdf_paginas(6, [(72, 300, [titulo]), (372, 100, ["Pagina {n} de {total}"])])
+        id_comparacao = self.envia(base=pdf, revisada=pdf).get_json()["id"]
+        estado = self.espera(id_comparacao)
+        self.assertEqual(estado["status"], "concluido", estado)
+        self.assertEqual(estado["totais"]["titulos"], {"base": titulo, "revisada": titulo})
+        self.assertEqual(estado["totais"]["titulo"], titulo)
+        rel = self.cliente.get("/comparacoes/%s/relatorio" % id_comparacao, buffered=True)
+        self.assertIn("<p class='doc'>%s</p>" % titulo, rel.get_data(as_text=True))
 
     def test_somente_marcados(self):
         estado = self.espera(self.envia(somente_marcados="1").get_json()["id"])
@@ -206,6 +234,20 @@ class TestPdfsGuardados(Base):
         self.assertNotIn("sandbox", corpo)  # o visualizador de PDF do Chrome não abre em iframe com sandbox
         self.assertIn("frame-src 'self'", pagina.headers["Content-Security-Policy"])
 
+    def test_pagina_dos_pdfs_nao_usa_estilo_nem_script_inline(self):
+        for consulta in ("?b=1&r=2", "?r=2", ""):
+            with self.subTest(consulta=consulta):
+                confere_csp_da_pagina(self, self.cliente.get(self.url + consulta).get_data(as_text=True))
+        # a página de erro (comparação que não existe) usa o mesmo modelo
+        confere_csp_da_pagina(self, self.cliente.get("/comparacoes/%s/pdfs" % ("0" * 32)).get_data(as_text=True))
+
+    def test_titulo_diz_o_que_a_pagina_mostra(self):
+        self.assertIn("<h1>O trecho nos dois PDFs</h1>", self.cliente.get(self.url + "?b=1&r=2").get_data(as_text=True))
+        self.assertIn("<h1>O trecho na versão revisada</h1>", self.cliente.get(self.url + "?r=2").get_data(as_text=True))
+        self.assertIn("<h1>Os dois PDFs lado a lado</h1>", self.cliente.get(self.url).get_data(as_text=True))
+        self.assertIn("<h1>Não foi possível abrir os PDFs</h1>",
+                      self.cliente.get("/comparacoes/%s/pdfs" % ("0" * 32)).get_data(as_text=True))
+
     def test_item_de_um_lado_so_mostra_um_painel(self):
         for param, ausente, presente in (("r=3", "base", "revisada"), ("b=3", "revisada", "base")):
             with self.subTest(param=param):
@@ -250,6 +292,8 @@ class TestPdfsGuardados(Base):
         self.assertEqual(self.cliente.get(self.url + "?b=1").status_code, 404)
 
     def test_expirar_leva_os_pdfs_junto(self):
+        # o status vira «concluído» antes de a supervisão soltar o processo; limpa_expirados pula quem ainda roda
+        self._espera_supervisao()
         pasta = servidor.pasta_do(self.id)
         escreve = json.loads((pasta / "status.json").read_text())
         escreve["criado_em"] = time.time() - 90000
