@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>PDFs da comparação</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="pdfs">
   <header class="pdfs-topo">
-    <h1>PDFs da comparação</h1>
+    <h1>{% if mensagem %}Não foi possível abrir os PDFs{% elif paineis|length == 1 %}O trecho na versão {{ paineis[0].rotulo|lower }}{% elif paineis[0].pagina %}O trecho nos dois PDFs{% else %}Os dois PDFs lado a lado{% endif %}</h1>
     {% for versao in sem_o_trecho %}
     <p class="nota">Este trecho não existe na versão {{ versao }}.</p>
     {% endfor %}
@@ -17,19 +18,27 @@
 
   {% if mensagem %}
   <main class="miolo">
-    <div class="aviso" role="alert">{{ mensagem }}</div>
+    <div class="aviso" role="alert">
+      <svg class="ic ic-erro" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5"/><path d="M12 16.5h.01"/></svg>
+      <span class="aviso-texto">{{ mensagem }}</span>
+    </div>
   </main>
   {% else %}
   <main class="pdfs-paineis{% if paineis|length == 1 %} um{% endif %}">
     {% for p in paineis %}
     <section class="pdfs-painel" aria-label="PDF da versão {{ p.rotulo|lower }}">
       <header>
-        <b>{{ p.rotulo }}</b>
-        <span class="pdfs-nome">{{ p.nome }}</span>
-        {% if p.pagina %}<span>p. {{ p.pagina }}</span>{% endif %}
-        <a class="botao" href="{{ p.src }}" target="_blank" rel="noopener">Abrir em outra aba</a>
+        <b class="pdfs-rotulo">{{ p.rotulo }}</b>
+        <span class="pdfs-nome" title="{{ p.nome }}">{{ p.nome }}</span>
+        {% if p.pagina %}<span class="pdfs-pagina">p. {{ p.pagina }}</span>{% endif %}
+        <a class="btn btn-pequeno" href="{{ p.src }}" target="_blank" rel="noopener">
+          <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>
+          Abrir em outra aba
+        </a>
       </header>
-      <iframe src="{{ p.src }}" title="PDF da versão {{ p.rotulo|lower }}"></iframe>
+      <div class="pdfs-quadro">
+        <iframe src="{{ p.src }}" title="PDF da versão {{ p.rotulo|lower }}"></iframe>
+      </div>
     </section>
     {% endfor %}
   </main>
