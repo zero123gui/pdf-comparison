@@ -1,18 +1,36 @@
+/**
+ * Página do comparador de PDFs: três telas (envio, andamento e resultado) numa página só.
+ *
+ * Fluxo: o usuário escolhe os dois PDFs -> POST /api/comparacoes (responde 202 com o id) -> a página consulta
+ * /api/comparacoes/<id>/andamento a cada 1,5 segundo -> ao concluir, mostra o relatório num iframe
+ * (/comparacoes/<id>/relatorio). O id fica na URL (?comparacao=<id>), então atualizar a página volta à
+ * comparação. JavaScript puro, sem biblioteca; a CSP da página não aceita script nem estilo inline.
+ */
 (() => {
   "use strict";
   const $ = (seletor) => document.querySelector(seletor);
-  const maxMb = Number(document.body.dataset.maxMb);
+  const maxMb = Number(document.body.dataset.maxMb);  // limite por arquivo, vindo do servidor (data-max-mb)
   const telas = { envio: $("#tela-envio"), andamento: $("#tela-andamento"), relatorio: $("#tela-relatorio") };
-  const arquivos = { base: null, revisada: null };
+  const arquivos = { base: null, revisada: null };  // os PDFs escolhidos (File), já validados
   let idComparacao = null;  // id da comparação em andamento
-  let temporizador = null;
-  let falhasSeguidas = 0;
+  let temporizador = null;  // setTimeout da próxima consulta ao andamento
+  let falhasSeguidas = 0;   // consultas seguidas sem resposta; ao chegar a 5, a página desiste
 
+  /**
+   * Mostra uma tela e esconde as outras.
+   * @param {"envio"|"andamento"|"relatorio"} nome A tela a mostrar. Nas telas de andamento e de resultado o
+   *   foco vai para o título, para quem usa leitor de tela ouvir a tela nova.
+   */
   function mostra(nome) {
     Object.entries(telas).forEach(([k, el]) => { el.hidden = k !== nome; });
     // quem usa leitor de tela ouve o título da tela nova
     if (nome !== "envio") telas[nome].querySelector("h1").focus({ preventScroll: true });
   }
+  /**
+   * Mostra (ou esconde, com texto vazio) a faixa de aviso do topo.
+   * @param {string} texto A mensagem; vazio esconde a faixa.
+   * @param {boolean} [informativo] Verdadeiro para uma informação (role="status"); falso para um erro (role="alert").
+   */
   function aviso(texto, informativo) {
     const el = $("#aviso");
     $("#aviso-texto").textContent = texto || "";
@@ -20,19 +38,38 @@
     el.classList.toggle("info", Boolean(informativo));
     el.setAttribute("role", informativo ? "status" : "alert");
   }
+  /**
+   * Tamanho de arquivo para mostrar: «1,5 MB» ou «320 KB».
+   * @param {number} bytes
+   * @returns {string}
+   */
   function tamanho(bytes) {
     return bytes >= 1048576 ? (bytes / 1048576).toFixed(1).replace(".", ",") + " MB" : Math.max(1, Math.round(bytes / 1024)) + " KB";
   }
+  /**
+   * O número com a palavra no singular ou no plural: «1 diferença», «2 diferenças».
+   * @param {number} n
+   * @param {string} singular
+   * @param {string} varios
+   * @returns {string}
+   */
   function plural(n, singular, varios) {
     return n + " " + (n === 1 ? singular : varios);
   }
-  // botão com indicador de carregamento (aria-busy); o clique é ignorado enquanto ele estiver ocupado
+  /**
+   * Liga ou desliga o indicador de carregamento do botão (aria-busy). O clique é ignorado enquanto ele
+   * estiver ocupado.
+   * @param {HTMLElement} botao
+   * @param {boolean} sim
+   */
   function ocupado(botao, sim) {
     if (sim) botao.setAttribute("aria-busy", "true"); else botao.removeAttribute("aria-busy");
   }
+  /** O botão está ocupado (com uma requisição em andamento)? */
   const ocupadoAgora = (botao) => botao.getAttribute("aria-busy") === "true";
 
   // ------------------------------------------------------------------ escolha dos arquivos
+  /** Diz, abaixo do botão «Comparar», o que falta escolher; some quando os dois PDFs estão escolhidos. */
   function atualizaDica() {
     let texto = "";
     if (!arquivos.base && !arquivos.revisada) texto = "Escolha a versão base e a versão revisada.";
@@ -42,6 +79,13 @@
     $("#dica-comparar").hidden = !texto;
   }
 
+  /**
+   * Registra (ou limpa) o PDF de uma das zonas de envio.
+   * Recusa o que não é .pdf ou passa do limite, com um aviso; aceita o resto, mostra nome e tamanho na zona e
+   * habilita o botão «Comparar» quando os dois PDFs estão escolhidos.
+   * @param {"base"|"revisada"} campo A zona.
+   * @param {File|null} arquivo O arquivo escolhido, ou null para limpar a zona.
+   */
   function escolhe(campo, arquivo) {
     const zona = $("#zona-" + campo);
     const estado = zona.querySelector(".zona-estado");
@@ -86,6 +130,11 @@
   });
 
   // ---------------------------------------------------------------------------------- envio
+  /**
+   * Mostra a etapa e a barra de andamento.
+   * @param {string} etapa O que está acontecendo («Lendo a versão base»).
+   * @param {number|null} progresso De 0 a 100; null (na fila) deixa a barra em movimento, sem valor.
+   */
   function andamento(etapa, progresso) {
     $("#etapa").textContent = etapa;
     const barra = $("#barra");
@@ -97,6 +146,10 @@
       $("#pct").textContent = progresso + "%";
     }
   }
+  /**
+   * Título da tela de andamento: «Comparando «a.pdf» com «b.pdf»», ou um texto genérico sem os nomes.
+   * @param {{base: string, revisada: string}} [nomes] Os nomes dos arquivos.
+   */
   function titulo(nomes) {
     $("#titulo-andamento").textContent = nomes && nomes.base && nomes.revisada
       ? "Comparando «" + nomes.base + "» com «" + nomes.revisada + "»"
@@ -134,6 +187,11 @@
     xhr.send(dados);
   });
 
+  /**
+   * Volta à tela de envio, esquecendo a comparação em andamento (tira o id da URL).
+   * @param {string} mensagem Aviso a mostrar; vazio não mostra nenhum.
+   * @param {boolean} [informativo] Veja `aviso`.
+   */
   function volta(mensagem, informativo) {
     clearTimeout(temporizador);
     idComparacao = null;
@@ -143,6 +201,10 @@
   }
 
   // ------------------------------------------------------------------------------ andamento
+  /**
+   * Passa a acompanhar uma comparação: guarda o id na URL (atualizar a página volta a ela) e começa a consultar.
+   * @param {string} id O id devolvido por POST /api/comparacoes.
+   */
   function acompanha(id) {
     idComparacao = id;
     falhasSeguidas = 0;
@@ -151,6 +213,11 @@
     consulta();
   }
 
+  /**
+   * Consulta o andamento da comparação e age conforme o status: concluída mostra o relatório, erro ou 404 volta
+   * ao envio, o resto atualiza a barra e agenda a próxima consulta (1,5 s). Cinco falhas de rede seguidas
+   * encerram o acompanhamento.
+   */
   async function consulta() {
     const id = idComparacao;
     if (!id) return;
@@ -185,6 +252,11 @@
   });
 
   // ------------------------------------------------------------------------------ relatório
+  /**
+   * Mostra a tela de resultado de uma comparação concluída: o título do documento (lido de dentro dos PDFs), o
+   * resumo, a validade e o relatório no iframe, com os links para abri-lo em outra aba e baixá-lo.
+   * @param {object} estado A resposta de /api/comparacoes/<id>/andamento (`totais`, `nomes`, `expira_em`).
+   */
   function mostraRelatorio(estado) {
     clearTimeout(temporizador);
     const t = estado.totais || {};
