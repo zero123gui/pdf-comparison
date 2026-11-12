@@ -51,8 +51,8 @@
 
         <div class="rodape-form">
           <button type="submit" id="btn-comparar" class="primario" disabled>Comparar</button>
-          <p class="nota">Os PDFs são apagados assim que a comparação termina. O relatório fica disponível por
-            {{ ttl_horas }} horas para quem tiver o link. Limite de {{ max_mb }} MB por arquivo.</p>
+          <p class="nota">Os PDFs ficam no servidor, junto com o relatório, por {{ ttl_horas }} horas, para quem tiver
+            o link (é assim que o relatório abre os PDFs); depois disso são apagados. Limite de {{ max_mb }} MB por arquivo.</p>
         </div>
       </form>
     </section>
@@ -80,7 +80,7 @@
           <button type="button" id="btn-apagar" class="secundario">Apagar agora</button>
         </div>
       </div>
-      <iframe id="quadro" title="Relatório de comparação" sandbox="allow-scripts"></iframe>
+      <iframe id="quadro" title="Relatório de comparação" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"></iframe>
     </section>
   </main>
 

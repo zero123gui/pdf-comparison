@@ -45,12 +45,12 @@ Os valores também aparecem como constantes no topo do `servidor.py`.
 | Variável | Padrão | O que controla |
 | --- | --- | --- |
 | `HOST`, `PORT` | `localhost`, `8080` | Endereço do servidor |
-| `PDFDIFF_DATA_DIR` | `./data` | Pasta das comparações (PDFs temporários e relatórios) |
+| `PDFDIFF_DATA_DIR` | `./data` | Pasta das comparações (PDFs enviados, relatórios e estado) |
 | `PDFDIFF_MAX_FILE_MB` | 60 | Tamanho máximo de cada PDF |
 | `PDFDIFF_MAX_CONCURRENT` | 2 | Comparações ao mesmo tempo |
 | `PDFDIFF_MAX_QUEUE` | 6 | Quantas esperam na fila; além disso a resposta é `429` |
 | `PDFDIFF_TIMEOUT_MIN` | 20 | Tempo limite de uma comparação |
-| `PDFDIFF_TTL_HORAS` | 24 | Quanto tempo o relatório fica disponível |
+| `PDFDIFF_TTL_HORAS` | 24 | Quanto tempo o relatório e os PDFs ficam disponíveis |
 | `PDFDIFF_WORKERS` | 4 | Processos de leitura de páginas dentro de cada comparação |
 | `PDFDIFF_IGNORAR_PAGINAS` | 1 | Valor inicial do campo «páginas iniciais a ignorar» |
 
@@ -66,15 +66,23 @@ comparação usa até cerca de 1 GB de memória.
 | `/api/comparacoes` | POST | Recebe `base`, `revisada`, `ignorar_paginas`, `somente_marcados`; devolve `202` com o `id` |
 | `/api/comparacoes/<id>/andamento` | GET | Andamento: `status` (`na_fila`, `executando`, `concluido`, `erro`), `etapa`, `progresso` |
 | `/comparacoes/<id>/relatorio` | GET | Relatório pronto (`?baixar=1` baixa o arquivo) |
+| `/comparacoes/<id>/pdfs` | GET | Os dois PDFs lado a lado: `?b=N` é a página na base e `?r=N` na revisada (o card da diferença liga para cá). Sem a página de um lado, esse lado não aparece |
+| `/comparacoes/<id>/pdf/<versao>` | GET | Um dos PDFs enviados (`base` ou `revisada`), aberto no navegador |
 | `/api/comparacoes/<id>` | DELETE | Apaga a comparação agora (cancela se estiver rodando) |
 | `/saude` | GET | `ok`, para monitoramento |
 
 ### Privacidade
 
-Os PDFs enviados são apagados pelo próprio processo de comparação antes de a comparação ser dada como
-concluída. O relatório e o estado ficam em `PDFDIFF_DATA_DIR/comparacoes/<id>/` e são removidos depois do prazo
-(`PDFDIFF_TTL_HORAS`) ou quando o usuário apaga. O `id` tem 128 bits aleatórios; não há listagem de comparações.
-Os logs registram id, tamanhos e tempos, nunca o conteúdo dos PDFs.
+Os PDFs enviados **ficam no servidor** enquanto a comparação existir, porque o relatório tem, em cada diferença,
+um link «Ver nos PDFs» que os abre na página da diferença. Quem tiver o link da comparação consegue abrir os
+dois PDFs inteiros, então use o sistema só em rede interna. Se a comparação der erro, os PDFs são apagados na hora.
+Os PDFs, o relatório e o estado ficam em `PDFDIFF_DATA_DIR/comparacoes/<id>/` e são removidos juntos depois do
+prazo (`PDFDIFF_TTL_HORAS`) ou quando o usuário apaga. O disco usado é de até duas vezes `PDFDIFF_MAX_FILE_MB` por
+comparação e não há limite para a quantidade delas dentro do prazo. O `id` tem 128 bits aleatórios; não há
+listagem de comparações. Os logs registram id, tamanhos e tempos, nunca o conteúdo dos PDFs.
+
+O link «Ver nos PDFs» só aparece no relatório aberto pelo servidor. No arquivo baixado e no relatório da linha
+de comando ele não existe. Ele leva à **página** do PDF, não ao trecho.
 
 ### Testes
 

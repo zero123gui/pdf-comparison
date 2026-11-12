@@ -477,6 +477,7 @@ main{max-width:980px;margin:0 auto;padding:24px 16px 64px}h1{font-size:22px;marg
 .m-sem{color:var(--delf);font-weight:600}.m-marcado{color:var(--addf)}
 ins{background:var(--add);color:var(--addf);text-decoration:none;border-radius:2px;padding:0 2px}del{background:var(--del);color:var(--delf);border-radius:2px;padding:0 2px}
 h2{font-size:17px;margin:28px 0 6px}details{margin:8px 0}summary{cursor:pointer;color:var(--acc)}
+.ver{margin-left:auto;color:var(--acc);font-weight:600}
 """
 
 JS = """
@@ -484,6 +485,9 @@ const itens=[...document.querySelectorAll('.item')];let ft='todos',fm='marcado';
 function aplica(){let n=0;itens.forEach(e=>{const ok=(ft==='todos'||e.dataset.tipo===ft)&&(fm==='todas'||e.dataset.marc===fm);e.hidden=!ok;if(ok)n++});document.getElementById('n').textContent=n}
 document.querySelectorAll('[data-ft]').forEach(b=>b.onclick=()=>{ft=b.dataset.ft;document.querySelectorAll('[data-ft]').forEach(x=>x.classList.toggle('on',x===b));aplica()});
 document.querySelectorAll('[data-fm]').forEach(b=>b.onclick=()=>{fm=b.dataset.fm;document.querySelectorAll('[data-fm]').forEach(x=>x.classList.toggle('on',x===b));aplica()});aplica();
+const srv=location.pathname.match(/^\\/comparacoes\\/([0-9a-f]{32})\\/relatorio$/);
+if(srv)itens.forEach(e=>{const q=[];if(e.dataset.pb)q.push('b='+e.dataset.pb);if(e.dataset.pr)q.push('r='+e.dataset.pr);
+const a=e.querySelector('.ver');if(a&&q.length){a.href='/comparacoes/'+srv[1]+'/pdfs?'+q.join('&');a.hidden=false}});
 """
 
 
@@ -530,9 +534,14 @@ def gera_html(args, itens, colorido_igual, info):
             pags.append("revisada p. " + faixa(it["pag_r"], it.get("pag_r_fim")))
         rot = {"sem": "<span class='m-sem'>sem cor</span>", "parcial": "cor parcial",
                "marcado": "<span class='m-marcado'>marcado em cor</span>", "n/a": ""}[m]
-        h.append("<section class='item' data-tipo='%s' data-marc='%s'><header><b>#%d</b>"
-                 "<span class='tag t-%s'>%s</span><span>%s</span>%s</header><p>%s</p></section>" % (
-                     it["tipo"], m, k, it["tipo"], it["tipo"], " · ".join(pags), rot, it["html"]))
+        # primeira página de cada lado; quando o relatório é aberto pelo servidor, o JS usa estes
+        # números para ligar o link «Ver nos PDFs» (o arquivo baixado ou da linha de comando não tem PDFs)
+        paginas = "".join(" data-%s='%d'" % (chave, it[campo])
+                          for chave, campo in (("pb", "pag_b"), ("pr", "pag_r")) if it[campo])
+        h.append("<section class='item' data-tipo='%s' data-marc='%s'%s><header><b>#%d</b>"
+                 "<span class='tag t-%s'>%s</span><span>%s</span>%s"
+                 "<a class='ver' target='_blank' rel='noopener' hidden>Ver nos PDFs</a></header><p>%s</p></section>" % (
+                     it["tipo"], m, paginas, k, it["tipo"], it["tipo"], " · ".join(pags), rot, it["html"]))
     if info["num_so_base"] or info["num_so_rev"]:
         h.append("<h2>Numeração de passos</h2><p class='sub'>Números de passo (ex.: 8.4.1.1) que existem "
                  "só em uma das versões. Ficam fora da lista acima porque ocupam coluna própria.</p>")
