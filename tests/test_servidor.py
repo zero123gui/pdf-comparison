@@ -87,12 +87,17 @@ class TestPaginasEEnvio(Base):
             with self.subTest(id_comparacao=id_comparacao):
                 self.assertEqual(self.cliente.get("/api/comparacoes/%s/andamento" % id_comparacao).status_code, 404)
                 self.assertEqual(self.cliente.get("/comparacoes/%s/relatorio" % id_comparacao).status_code, 404)
+                self.assertEqual(self.cliente.get("/comparacoes/%s/pdfs?b=1" % id_comparacao).status_code, 404)
+                self.assertEqual(self.cliente.get("/comparacoes/%s/pdf/base" % id_comparacao).status_code, 404)
                 self.assertEqual(self.cliente.delete("/api/comparacoes/" + id_comparacao).status_code, 404)
 
     def test_relatorio_antes_de_pronto_devolve_409(self):
         id_comparacao, pasta = servidor.nova_comparacao()
         (pasta / "status.json").write_text(json.dumps({"status": "executando"}))
+        (pasta / "base.pdf").write_bytes(b"%PDF-")
         self.assertEqual(self.cliente.get("/comparacoes/%s/relatorio" % id_comparacao).status_code, 409)
+        self.assertEqual(self.cliente.get("/comparacoes/%s/pdfs?b=1" % id_comparacao).status_code, 409)
+        self.assertEqual(self.cliente.get("/comparacoes/%s/pdf/base" % id_comparacao).status_code, 409)
 
 
 class TestLimites(Base):
@@ -124,18 +129,21 @@ class TestComparacao(Base):
         self.assertGreaterEqual(estado["totais"]["marcados"], 1)
         self.assertEqual(estado["nomes"], {"base": "base.pdf", "revisada": "revisada.pdf"})
 
-        rel = self.cliente.get("/comparacoes/%s/relatorio" % id_comparacao)
+        # buffered=True fecha o arquivo servido; no Windows um arquivo aberto não pode ser apagado
+        rel = self.cliente.get("/comparacoes/%s/relatorio" % id_comparacao, buffered=True)
         self.assertEqual((rel.status_code, rel.mimetype), (200, "text/html"))
         self.assertIn(b"CFC", rel.data)
         self.assertIn("default-src 'none'", rel.headers["Content-Security-Policy"])
-        baixar = self.cliente.get("/comparacoes/%s/relatorio?baixar=1" % id_comparacao)
+        baixar = self.cliente.get("/comparacoes/%s/relatorio?baixar=1" % id_comparacao, buffered=True)
         self.assertIn("attachment", baixar.headers["Content-Disposition"])
 
-        # os PDFs enviados não ficam guardados
+        # os PDFs ficam guardados (o link «Ver nos PDFs» do relatório os abre) e saem junto com a comparação
+        self.assertIn(b"class='ver'", rel.data)
         pasta = servidor.pasta_do(id_comparacao)
-        self.assertFalse((pasta / "base.pdf").exists() or (pasta / "revisada.pdf").exists())
+        self.assertTrue((pasta / "base.pdf").exists() and (pasta / "revisada.pdf").exists())
 
         self.assertEqual(self.cliente.delete("/api/comparacoes/" + id_comparacao).status_code, 204)
+        self.assertFalse(pasta.exists())
         self.assertEqual(self.cliente.get("/api/comparacoes/%s/andamento" % id_comparacao).status_code, 404)
         self.assertEqual(self.cliente.get("/comparacoes/%s/relatorio" % id_comparacao).status_code, 404)
 
@@ -145,15 +153,110 @@ class TestComparacao(Base):
         self.assertEqual(estado["totais"]["itens"], estado["totais"]["marcados"])
 
     def test_pdf_corrompido_gera_erro_claro(self):
-        estado = self.espera(self.envia(base=b"%PDF-1.4\nlixo sem estrutura").get_json()["id"])
+        id_comparacao = self.envia(base=b"%PDF-1.4\nlixo sem estrutura").get_json()["id"]
+        estado = self.espera(id_comparacao)
         self.assertEqual(estado["status"], "erro")
         self.assertIn("base.pdf", estado["erro"])
         self.assertIn("corrompido", estado["erro"])
+        # com erro não há relatório que precise dos PDFs: eles saem na hora
+        pasta = servidor.pasta_do(id_comparacao)
+        self.assertFalse((pasta / "base.pdf").exists() or (pasta / "revisada.pdf").exists())
+        for versao in ("base", "revisada"):
+            self.assertEqual(self.cliente.get("/comparacoes/%s/pdf/%s" % (id_comparacao, versao)).status_code, 409)
 
     def test_pdf_sem_texto_gera_erro_claro(self):
         estado = self.espera(self.envia(base=pdf_simples([])).get_json()["id"])
         self.assertEqual(estado["status"], "erro")
         self.assertIn("não tem texto", estado["erro"])
+
+
+class TestPdfsGuardados(Base):
+    """Os links «Ver nos PDFs» do relatório abrem os PDFs enviados, que ficam guardados."""
+
+    def setUp(self):
+        super().setUp()
+        self.bytes_base, self.bytes_revisada = pdf_simples(BASE), pdf_simples(REVISADA, azuis={1, 2})
+        self.id = self.envia(base=self.bytes_base, revisada=self.bytes_revisada).get_json()["id"]
+        self.assertEqual(self.espera(self.id)["status"], "concluido")
+        self.url = "/comparacoes/%s/pdfs" % self.id
+
+    def test_pdf_e_servido_no_navegador(self):
+        for versao, original in (("base", self.bytes_base), ("revisada", self.bytes_revisada)):
+            with self.subTest(versao=versao):
+                resposta = self.cliente.get("/comparacoes/%s/pdf/%s" % (self.id, versao), buffered=True)
+                self.assertEqual((resposta.status_code, resposta.mimetype), (200, "application/pdf"))
+                self.assertEqual(resposta.data, original)
+                self.assertTrue(resposta.headers["Content-Disposition"].startswith("inline"))
+                self.assertIn("%s.pdf" % versao, resposta.headers["Content-Disposition"])
+                self.assertEqual(resposta.headers["Cache-Control"], "no-store")
+                self.assertEqual(resposta.headers["X-Content-Type-Options"], "nosniff")
+
+    def test_so_serve_as_duas_versoes_conhecidas(self):
+        for versao in ("outra", "base.pdf", "..%2Fstatus.json", "%2e%2e", "status.json"):
+            with self.subTest(versao=versao):
+                self.assertEqual(self.cliente.get("/comparacoes/%s/pdf/%s" % (self.id, versao)).status_code, 404)
+
+    def test_lado_a_lado_cada_pdf_na_sua_pagina(self):
+        pagina = self.cliente.get(self.url + "?b=12&r=14")
+        self.assertEqual((pagina.status_code, pagina.mimetype), (200, "text/html"))
+        corpo = pagina.get_data(as_text=True)
+        self.assertEqual(corpo.count("<iframe"), 2)
+        self.assertIn('src="/comparacoes/%s/pdf/base#page=12"' % self.id, corpo)
+        self.assertIn('src="/comparacoes/%s/pdf/revisada#page=14"' % self.id, corpo)
+        self.assertNotIn("sandbox", corpo)  # o visualizador de PDF do Chrome não abre em iframe com sandbox
+        self.assertIn("frame-src 'self'", pagina.headers["Content-Security-Policy"])
+
+    def test_item_de_um_lado_so_mostra_um_painel(self):
+        for param, ausente, presente in (("r=3", "base", "revisada"), ("b=3", "revisada", "base")):
+            with self.subTest(param=param):
+                corpo = self.cliente.get(self.url + "?" + param).get_data(as_text=True)
+                self.assertEqual(corpo.count("<iframe"), 1)
+                self.assertIn("/pdf/%s#page=3" % presente, corpo)
+                self.assertNotIn("/pdf/%s" % ausente, corpo)
+                self.assertIn("Este trecho não existe na versão %s." % ausente, corpo)
+
+    def test_sem_pagina_abre_os_dois_no_inicio(self):
+        corpo = self.cliente.get(self.url).get_data(as_text=True)
+        self.assertEqual(corpo.count("<iframe"), 2)
+        self.assertNotIn("#page=", corpo)
+        self.assertNotIn("não existe na versão", corpo)
+
+    def test_pagina_invalida_e_ignorada_e_nunca_repetida_na_resposta(self):
+        for valor in ("abc", "0", "-1", "100000", "1.5", "", "<script>alert(1)</script>", "%00"):
+            with self.subTest(valor=valor):
+                corpo = self.cliente.get(self.url, query_string={"b": valor, "r": "2"}).get_data(as_text=True)
+                self.assertEqual(corpo.count("<iframe"), 1)
+                self.assertIn("/pdf/revisada#page=2", corpo)
+                self.assertNotIn("alert(1)", corpo)
+        # sem nenhuma página válida abrem os dois PDFs, no início
+        corpo = self.cliente.get(self.url, query_string={"b": "abc", "r": "<x>"}).get_data(as_text=True)
+        self.assertEqual(corpo.count("<iframe"), 2)
+        self.assertNotIn("#page=", corpo)
+
+    def test_pdfs_que_nao_estao_mais_no_servidor(self):
+        """Comparação feita antes de os PDFs serem guardados: o relatório continua, os PDFs não."""
+        (servidor.pasta_do(self.id) / "base.pdf").unlink()
+        pagina = self.cliente.get(self.url + "?b=1&r=1")
+        self.assertEqual(pagina.status_code, 404)
+        self.assertIn("não estão disponíveis", pagina.get_data(as_text=True))
+        self.assertNotIn("<iframe", pagina.get_data(as_text=True))
+        self.assertEqual(self.cliente.get("/comparacoes/%s/pdf/base" % self.id).status_code, 404)
+        self.assertEqual(self.cliente.get("/comparacoes/%s/pdf/revisada" % self.id, buffered=True).status_code, 200)
+        self.assertEqual(self.cliente.get("/comparacoes/%s/relatorio" % self.id, buffered=True).status_code, 200)
+
+    def test_apagar_leva_os_pdfs_junto(self):
+        self.assertEqual(self.cliente.delete("/api/comparacoes/" + self.id).status_code, 204)
+        self.assertEqual(self.cliente.get("/comparacoes/%s/pdf/base" % self.id).status_code, 404)
+        self.assertEqual(self.cliente.get(self.url + "?b=1").status_code, 404)
+
+    def test_expirar_leva_os_pdfs_junto(self):
+        pasta = servidor.pasta_do(self.id)
+        escreve = json.loads((pasta / "status.json").read_text())
+        escreve["criado_em"] = time.time() - 90000
+        (pasta / "status.json").write_text(json.dumps(escreve))
+        self.assertEqual(servidor.limpa_expirados(), 1)
+        self.assertFalse(pasta.exists())
+        self.assertEqual(self.cliente.get("/comparacoes/%s/pdf/revisada" % self.id).status_code, 404)
 
 
 class TestTempoLimite(Base):

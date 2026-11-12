@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDFs da comparação</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="pdfs">
+  <header class="pdfs-topo">
+    <h1>PDFs da comparação</h1>
+    {% for versao in sem_o_trecho %}
+    <p class="nota">Este trecho não existe na versão {{ versao }}.</p>
+    {% endfor %}
+  </header>
+
+  {% if mensagem %}
+  <main class="miolo">
+    <div class="aviso" role="alert">{{ mensagem }}</div>
+  </main>
+  {% else %}
+  <main class="pdfs-paineis{% if paineis|length == 1 %} um{% endif %}">
+    {% for p in paineis %}
+    <section class="pdfs-painel" aria-label="PDF da versão {{ p.rotulo|lower }}">
+      <header>
+        <b>{{ p.rotulo }}</b>
+        <span class="pdfs-nome">{{ p.nome }}</span>
+        {% if p.pagina %}<span>p. {{ p.pagina }}</span>{% endif %}
+        <a class="botao" href="{{ p.src }}" target="_blank" rel="noopener">Abrir em outra aba</a>
+      </header>
+      <iframe src="{{ p.src }}" title="PDF da versão {{ p.rotulo|lower }}"></iframe>
+    </section>
+    {% endfor %}
+  </main>
+  {% endif %}
+</body>
+</html>

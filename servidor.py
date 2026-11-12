@@ -18,7 +18,7 @@ import traceback
 import uuid
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template, request, send_file
+from flask import Flask, Response, jsonify, render_template, request, send_file, url_for
 
 import pdf_diff
 
@@ -47,6 +47,8 @@ IGNORAR_PAGINAS_PADRAO = _inteiro("PDFDIFF_IGNORAR_PAGINAS", 1)   # valor inicia
 MB = 1024 * 1024
 ID_VALIDO = re.compile(r"[0-9a-f]{32}")
 TERMINAIS = ("concluido", "erro")
+VERSOES_PDF = {"base": "base.pdf", "revisada": "revisada.pdf"}   # versão (como aparece na URL) -> arquivo
+PAGINA_PDF_MAX = 99999                                            # maior página aceita em ?b= e ?r=
 CSP_RELATORIO = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
                  "base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
 CSP_PAGINA = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -125,8 +127,10 @@ def estado(id_comparacao):
 
 
 def apaga_entradas(pasta):
-    """Os PDFs enviados não ficam guardados: saem antes de a comparação ser dada como terminada."""
-    for nome in ("base.pdf", "revisada.pdf"):
+    """Apaga os PDFs enviados. Numa comparação concluída eles ficam (os links do relatório abrem
+    os PDFs) e saem junto com a pasta, ao expirar ou ao apagar; só uma comparação que deu erro
+    apaga os PDFs na hora, porque não há relatório que precise deles."""
+    for nome in VERSOES_PDF.values():
         (Path(pasta) / nome).unlink(missing_ok=True)
 
 
@@ -152,7 +156,6 @@ def executa_comparacao(pasta, leitores):
             workers=leitores,
             progresso=lambda etapa, fracao: escreve_status(pasta, etapa=etapa, progresso=round(fracao, 3)),
             nome_base=meta["nome_base"], nome_revisada=meta["nome_revisada"])
-        apaga_entradas(pasta)
         tmp = pasta / "relatorio.html.tmp"
         tmp.write_text(resultado["html"], encoding="utf-8")
         os.replace(tmp, pasta / "relatorio.html")
@@ -247,7 +250,8 @@ def supervisiona(id_comparacao):
         escreve_status(pasta, status="erro", etapa="Erro", erro="Erro interno do servidor.")
     finally:
         _canceladas.discard(id_comparacao)
-        apaga_entradas(pasta)  # garantia extra: nada do que foi enviado fica guardado
+        if estado(id_comparacao).get("status") != "concluido":
+            apaga_entradas(pasta)  # garantia extra: sem relatório pronto, os PDFs enviados não ficam guardados
         libera_vaga()
 
 
@@ -437,6 +441,70 @@ def mostra_relatorio(id_comparacao):
     resposta.headers["Content-Security-Policy"] = CSP_RELATORIO
     resposta.headers["Cache-Control"] = "no-store"
     return resposta
+
+
+def pagina_do_pdf(valor):
+    """Página pedida em ?b= ou ?r=; None se faltar ou não for um número de 1 a PAGINA_PDF_MAX."""
+    try:
+        pagina = int(valor)
+    except (TypeError, ValueError):
+        return None
+    return pagina if 1 <= pagina <= PAGINA_PDF_MAX else None
+
+
+def pdf_guardado(id_comparacao, versao):
+    """Caminho do PDF guardado ("base" ou "revisada"); None se não existe (a comparação é de antes
+    de os PDFs serem guardados, deu erro, expirou ou foi apagada)."""
+    pasta, nome = pasta_do(id_comparacao), VERSOES_PDF.get(versao)
+    if pasta is None or nome is None:
+        return None
+    return pasta / nome if (pasta / nome).is_file() else None
+
+
+# Um dos dois PDFs enviados ("base" ou "revisada"), aberto no próprio navegador; só de comparação concluída
+@app.route("/comparacoes/<id_comparacao>/pdf/<versao>")
+def mostra_pdf(id_comparacao, versao):
+    status = estado(id_comparacao)
+    if not status:
+        raise AppException("Esta comparação não existe mais: ela expirou ou foi apagada.", 404)
+    if status.get("status") != "concluido":
+        raise AppException("A comparação ainda não terminou.", 409)
+    caminho = pdf_guardado(id_comparacao, versao)
+    if caminho is None:
+        raise AppException("Este PDF não está disponível.", 404)
+    resposta = send_file(caminho, mimetype="application/pdf", as_attachment=False, conditional=True,
+                         download_name=status.get("nomes", {}).get(versao) or VERSOES_PDF[versao])
+    resposta.headers["Cache-Control"] = "no-store"
+    return resposta
+
+
+# Página com os dois PDFs lado a lado, cada um já na página da diferença: ?b= é a página na versão
+# base e ?r= na revisada. A versão sem página não tem o trecho (item adicionado ou removido) e fica
+# sem painel; sem nenhuma das duas, abre os dois PDFs no início
+@app.route("/comparacoes/<id_comparacao>/pdfs")
+def mostra_pdfs(id_comparacao):
+    status = estado(id_comparacao)
+    if not status:
+        return render_template("pdfs.html", mensagem="Esta comparação não existe mais: ela expirou ou foi apagada."), 404
+    if status.get("status") != "concluido":
+        return render_template("pdfs.html", mensagem="A comparação ainda não terminou."), 409
+
+    paginas = {"base": pagina_do_pdf(request.args.get("b")), "revisada": pagina_do_pdf(request.args.get("r"))}
+    abre_no_inicio = all(pagina is None for pagina in paginas.values())
+    paineis, sem_o_trecho = [], []
+    for versao, rotulo in (("base", "Base"), ("revisada", "Revisada")):
+        pagina = paginas[versao]
+        if pagina is None and not abre_no_inicio:
+            sem_o_trecho.append(versao)
+            continue
+        if pdf_guardado(id_comparacao, versao) is None:
+            return render_template("pdfs.html", mensagem=(
+                "Os PDFs desta comparação não estão disponíveis. O relatório continua valendo; "
+                "para ver os PDFs, faça a comparação de novo.")), 404
+        url = url_for("mostra_pdf", id_comparacao=id_comparacao, versao=versao)
+        paineis.append({"rotulo": rotulo, "nome": status.get("nomes", {}).get(versao) or VERSOES_PDF[versao],
+                        "pagina": pagina, "url": url, "src": url + ("#page=%d" % pagina if pagina else "")})
+    return render_template("pdfs.html", paineis=paineis, sem_o_trecho=sem_o_trecho)
 
 
 # Apaga a comparação e os arquivos dela agora; se ainda estiver rodando, ela é cancelada

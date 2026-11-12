@@ -62,5 +62,23 @@ progress { width: 100%; height: 14px; margin: 0 0 12px; accent-color: var(--acen
 .acoes { display: flex; gap: 8px; flex-wrap: wrap; }
 #quadro { display: block; width: 100%; height: 78vh; min-height: 480px; background: var(--cartao); border: 1px solid var(--borda); border-radius: 12px; }
 
+/* Página com os dois PDFs lado a lado (/comparacoes/<id>/pdfs) */
+.pdfs { display: flex; flex-direction: column; height: 100vh; }
+.pdfs-topo { display: flex; gap: 4px 16px; align-items: baseline; flex-wrap: wrap; padding: 10px 16px; background: var(--cartao); border-bottom: 1px solid var(--borda); }
+.pdfs-topo h1 { font-size: 18px; }
+.pdfs-topo .nota { margin: 0; }
+.pdfs-paineis { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px; }
+.pdfs-paineis.um { grid-template-columns: 1fr; }
+.pdfs-painel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--cartao); border: 1px solid var(--borda); border-radius: 8px; }
+.pdfs-painel header { display: flex; gap: 4px 8px; align-items: center; flex-wrap: wrap; padding: 6px 12px; border-bottom: 1px solid var(--borda); font-size: 14px; }
+.pdfs-nome { overflow-wrap: anywhere; color: var(--suave); }
+.pdfs-painel .botao { margin-left: auto; padding: 4px 12px; font-size: 14px; }
+.pdfs-painel iframe { flex: 1; min-height: 0; width: 100%; border: 0; }
+
 @media (max-width: 700px) { .arquivos { grid-template-columns: 1fr; } .zona { min-height: 120px; } }
+@media (max-width: 800px) {
+  .pdfs { height: auto; min-height: 100vh; }
+  .pdfs-paineis { grid-template-columns: 1fr; }
+  .pdfs-painel { min-height: 75vh; }
+}
 @media (prefers-reduced-motion: no-preference) { .zona { transition: border-color .15s; } }
